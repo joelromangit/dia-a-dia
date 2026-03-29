@@ -20,19 +20,19 @@ function App() {
       </div>
       <nav className="bottom-nav">
         <NavLink to="/" end className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <GraduationCap size={20} />
+          <GraduationCap size={22} />
           <span>Estudio</span>
         </NavLink>
         <NavLink to="/sleep" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <Moon size={20} />
+          <Moon size={22} />
           <span>Sueno</span>
         </NavLink>
         <NavLink to="/gym" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <Dumbbell size={20} />
+          <Dumbbell size={22} />
           <span>Gym</span>
         </NavLink>
         <NavLink to="/reading" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-          <Book size={20} />
+          <Book size={22} />
           <span>Lectura</span>
         </NavLink>
       </nav>
