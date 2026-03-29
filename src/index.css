@@ -255,12 +255,11 @@ body {
 
 @media (min-width: 768px) {
   .bottom-nav {
-    position: static;
     max-width: 700px;
-    margin: 0 auto;
+    left: 50%;
+    transform: translateX(-50%);
+    right: auto;
     border-radius: var(--radius) var(--radius) 0 0;
-    border: 1px solid var(--border);
-    border-bottom: none;
   }
 }
 
