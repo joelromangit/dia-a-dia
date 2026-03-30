@@ -39,13 +39,17 @@ function formatTimer(seconds) {
 }
 
 function GymPage() {
-  const [templates, setTemplates] = useDb(gymDb.getTemplates, mockGym.templates)
-  const [workouts, setWorkouts] = useDb(gymDb.getWorkouts, mockGym.workouts)
+  const [templates, setTemplates, templatesDb] = useDb(gymDb.getTemplates, mockGym.templates)
+  const [workouts, setWorkouts, workoutsDb] = useDb(gymDb.getWorkouts, mockGym.workouts)
   const [weeklyGoal] = useState(mockGym.weeklyGoal)
-  const [view, setView] = useState('list') // 'list' | 'calendar'
+  const [view, setView] = useState('list')
   const [modal, setModal] = useState(null)
   const [selectedDate, setSelectedDate] = useState(null)
   const [expandedWorkout, setExpandedWorkout] = useState(null)
+  const [showError, setShowError] = useState(true)
+
+  const loading = templatesDb.loading || workoutsDb.loading
+  const dbError = templatesDb.error || workoutsDb.error
 
   // Active workout state
   const [activeWorkout, setActiveWorkout] = useState(null)
@@ -62,6 +66,9 @@ function GymPage() {
 
   // Edit timer form
   const [editTimerForm, setEditTimerForm] = useState(null)
+
+  // Validation errors
+  const [errors, setErrors] = useState({})
 
   // Calendar
   const today = new Date()
@@ -194,12 +201,16 @@ function GymPage() {
   }
 
   const addExerciseToWorkout = () => {
-    if (!addExForm.name) return
+    if (!addExForm.name || !addExForm.name.trim()) {
+      setErrors({ addExName: 'El nombre es obligatorio' })
+      return
+    }
     setActiveWorkout({
       ...activeWorkout,
-      exercises: [...activeWorkout.exercises, { name: addExForm.name, sets: [] }]
+      exercises: [...activeWorkout.exercises, { name: addExForm.name.trim(), sets: [] }]
     })
     setAddExForm({ name: '', sets: 3, reps: '10' })
+    clearErrors()
     setModal(null)
   }
 
@@ -210,21 +221,52 @@ function GymPage() {
     })
   }
 
-  // Edit duration of a past workout
   const handleEditTimer = () => {
     if (!editTimerForm) return
+    const timerErrs = validateEditTimer()
+    if (Object.keys(timerErrs).length > 0) { setErrors(timerErrs); return }
     setWorkouts(workouts.map(w => {
       if (w.id !== editTimerForm.id) return w
       return { ...w, startTime: editTimerForm.startTime, endTime: editTimerForm.endTime, durationMin: editTimerForm.durationMin }
     }))
     gymDb.updateWorkoutTimer(editTimerForm.id, editTimerForm.startTime, editTimerForm.endTime, editTimerForm.durationMin)
     setEditTimerForm(null)
+    clearErrors()
     setModal(null)
+  }
+
+  const clearErrors = () => setErrors({})
+
+  const validateTemplateName = (name) => {
+    const errs = {}
+    if (!name || !name.trim()) errs.name = 'El nombre es obligatorio'
+    else if (templates.some(t => t.name.toLowerCase() === name.trim().toLowerCase() && t.id !== templateForm?.id))
+      errs.name = 'Ya existe una plantilla con ese nombre'
+    return errs
+  }
+
+  const validateTemplateExercise = () => {
+    const errs = {}
+    if (!templateExForm.name || !templateExForm.name.trim()) errs.exName = 'El nombre es obligatorio'
+    if (!templateExForm.defaultSets || templateExForm.defaultSets <= 0) errs.exSets = 'Debe ser positivo'
+    if (!templateExForm.defaultReps || !templateExForm.defaultReps.trim()) errs.exReps = 'Obligatorio'
+    return errs
+  }
+
+  const validateEditTimer = () => {
+    const errs = {}
+    if (!editTimerForm.startTime) errs.startTime = 'Hora inicio obligatoria'
+    if (!editTimerForm.endTime) errs.endTime = 'Hora fin obligatoria'
+    if (editTimerForm.startTime && editTimerForm.endTime && editTimerForm.durationMin <= 0)
+      errs.endTime = 'La hora fin debe ser posterior al inicio'
+    return errs
   }
 
   // Templates CRUD
   const handleSaveTemplate = () => {
-    if (!templateForm || !templateForm.name) return
+    if (!templateForm) return
+    const nameErrs = validateTemplateName(templateForm.name)
+    if (Object.keys(nameErrs).length > 0) { setErrors(nameErrs); return }
     if (templateForm.id) {
       setTemplates(templates.map(t => t.id === templateForm.id ? { ...templateForm } : t))
       gymDb.updateTemplate(templateForm.id, templateForm)
@@ -233,6 +275,7 @@ function GymPage() {
       gymDb.addTemplate(templateForm)
     }
     setTemplateForm(null)
+    clearErrors()
     setModal(null)
   }
 
@@ -242,12 +285,14 @@ function GymPage() {
   }
 
   const addExToTemplate = () => {
-    if (!templateExForm.name) return
+    const exErrs = validateTemplateExercise()
+    if (Object.keys(exErrs).length > 0) { setErrors(exErrs); return }
     setTemplateForm({
       ...templateForm,
       exercises: [...templateForm.exercises, { id: Date.now(), ...templateExForm }]
     })
     setTemplateExForm({ name: '', defaultSets: 4, defaultReps: '10-12' })
+    clearErrors()
   }
 
   const removeExFromTemplate = (exId) => {
@@ -265,36 +310,41 @@ function GymPage() {
     setSelectedDate(null)
   }
 
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <div className="spinner" />
+        <p>Cargando...</p>
+      </div>
+    )
+  }
+
   // ========== ACTIVE WORKOUT VIEW ==========
   if (activeWorkout) {
     return (
       <>
-        <div style={{
-          padding: '16px',
+        <div className="p-16 sticky-top" style={{
           background: `linear-gradient(135deg, ${activeWorkout.color}15 0%, transparent 100%)`,
-          position: 'sticky', top: 0, zIndex: 10, backdropFilter: 'blur(10px)'
+          backdropFilter: 'blur(10px)'
         }}>
-          <div className="flex justify-between items-center" style={{ marginBottom: 10 }}>
+          <div className="flex justify-between items-center mb-2">
             <div>
-              <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{activeWorkout.templateName}</div>
+              <div className="font-700 text-lg">{activeWorkout.templateName}</div>
               <div className="text-xs text-muted">Inicio: {activeWorkout.startTime}</div>
             </div>
-            <div style={{
-              fontSize: '1.4rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums',
-              color: activeWorkout.color
-            }}>
+            <div className="font-800 tabular-nums" style={{ fontSize: '1.4rem', color: activeWorkout.color }}>
               {formatTimer(elapsed)}
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button className="btn btn-sm" style={{ flex: 1, background: activeWorkout.color, color: 'white', border: 'none' }}
+          <div className="flex gap-8">
+            <button className="btn btn-sm flex-1 border-none text-white" style={{ background: activeWorkout.color }}
               onClick={finishWorkout}>
               <Square size={13} /> Terminar
             </button>
-            <button className="btn btn-sm btn-outline" onClick={() => setModal('add-exercise')}>
+            <button className="btn btn-sm btn-outline" onClick={() => { setModal('add-exercise'); clearErrors() }}>
               <Plus size={13} /> Ejercicio
             </button>
-            <button className="btn btn-sm" style={{ background: 'rgba(255,118,117,0.12)', color: 'var(--danger)', border: 'none' }}
+            <button className="btn btn-sm border-none" style={{ background: 'rgba(255,118,117,0.12)', color: 'var(--danger)' }}
               onClick={cancelWorkout}>
               <X size={13} />
             </button>
@@ -316,35 +366,36 @@ function GymPage() {
         ))}
 
         {activeWorkout.exercises.length === 0 && (
-          <div style={{ textAlign: 'center', padding: '40px 16px' }}>
-            <div className="text-muted" style={{ marginBottom: 12 }}>Anade ejercicios a tu entreno</div>
+          <div className="empty-state">
+            <div className="text-muted mb-3">Anade ejercicios a tu entreno</div>
             <button className="btn btn-primary" onClick={() => setModal('add-exercise')}>
               <Plus size={16} /> Ejercicio
             </button>
           </div>
         )}
 
-        <div style={{ height: 20 }} />
+        <div className="mt-4" />
 
         {modal === 'add-exercise' && (
-          <div className="modal-overlay" onClick={() => setModal(null)}>
+          <div className="modal-overlay" onClick={() => { clearErrors(); setModal(null) }}>
             <div className="modal" onClick={e => e.stopPropagation()}>
               <h2>Anadir ejercicio</h2>
               <div className="form-group">
                 <label>Nombre</label>
-                <input value={addExForm.name} onChange={e => setAddExForm({ ...addExForm, name: e.target.value })}
+                <input className={errors.addExName ? 'input-error' : ''} value={addExForm.name}
+                  onChange={e => { setAddExForm({ ...addExForm, name: e.target.value }); setErrors(prev => ({ ...prev, addExName: null })) }}
                   placeholder="Ej: Press banca" autoFocus />
+                {errors.addExName && <div className="error-text">{errors.addExName}</div>}
               </div>
-              {/* Quick picks from templates */}
               {templates.length > 0 && (
                 <div className="form-group">
                   <label>Desde plantilla</label>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                  <div className="flex flex-wrap gap-6 mt-1">
                     {templates.flatMap(t => t.exercises).filter(ex =>
                       !activeWorkout.exercises.some(ae => ae.name === ex.name)
                     ).slice(0, 12).map(ex => (
                       <button key={ex.id} className="btn btn-sm btn-outline"
-                        onClick={() => setAddExForm({ ...addExForm, name: ex.name })}>
+                        onClick={() => { setAddExForm({ ...addExForm, name: ex.name }); clearErrors() }}>
                         {ex.name}
                       </button>
                     ))}
@@ -352,8 +403,8 @@ function GymPage() {
                 </div>
               )}
               <div className="flex gap-2 mt-3">
-                <button className="btn btn-outline btn-block" onClick={() => setModal(null)}>Cancelar</button>
-                <button className="btn btn-primary btn-block" onClick={addExerciseToWorkout}>Anadir</button>
+                <button className="btn btn-outline btn-block" onClick={() => { clearErrors(); setModal(null) }}>Cancelar</button>
+                <button className="btn btn-primary btn-block" disabled={!addExForm.name.trim()} onClick={addExerciseToWorkout}>Anadir</button>
               </div>
             </div>
           </div>
@@ -384,6 +435,13 @@ function GymPage() {
         </div>
       </div>
 
+      {dbError && showError && (
+        <div className="error-banner">
+          <span>No se pudo conectar con el servidor. Usando datos locales.</span>
+          <button className="dismiss" onClick={() => setShowError(false)}>×</button>
+        </div>
+      )}
+
       {/* KPIs */}
       <div className="kpi-grid">
         <div className="kpi-card">
@@ -393,46 +451,41 @@ function GymPage() {
           <div className="kpi-label">Esta semana</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: 'var(--warning)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+          <div className="kpi-value flex items-center justify-center gap-1 text-warning">
             {streak} <Flame size={16} />
           </div>
           <div className="kpi-label">Racha</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: 'var(--primary-light)', fontSize: '1.2rem' }}>
+          <div className="kpi-value text-primary-light" style={{ fontSize: '1.2rem' }}>
             {(totalVolume / 1000).toFixed(1)}k
           </div>
           <div className="kpi-label">Vol. total (kg)</div>
         </div>
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: 'var(--text)' }}>
+          <div className="kpi-value">
             {avgDuration}m
           </div>
           <div className="kpi-label">Media duracion</div>
         </div>
       </div>
 
-      {/* View toggle */}
-      <div style={{ display: 'flex', margin: '0 16px 12px', background: 'var(--bg-card)', borderRadius: 10, border: '1px solid var(--border)', overflow: 'hidden' }}>
+      <div className="flex mx-16 mb-3 bg-card rounded border overflow-hidden">
         <button
+          className="flex-1 py-8 border-none cursor-pointer text-0.78 font-600 flex items-center justify-center gap-6"
           onClick={() => setView('list')}
           style={{
-            flex: 1, padding: '8px', border: 'none', cursor: 'pointer',
             background: view === 'list' ? 'var(--primary)' : 'transparent',
-            color: view === 'list' ? 'white' : 'var(--text-muted)',
-            fontSize: '0.78rem', fontWeight: 600,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
+            color: view === 'list' ? 'white' : 'var(--text-muted)'
           }}>
           <List size={14} /> Lista
         </button>
         <button
+          className="flex-1 py-8 border-none cursor-pointer text-0.78 font-600 flex items-center justify-center gap-6"
           onClick={() => setView('calendar')}
           style={{
-            flex: 1, padding: '8px', border: 'none', cursor: 'pointer',
             background: view === 'calendar' ? 'var(--primary)' : 'transparent',
-            color: view === 'calendar' ? 'white' : 'var(--text-muted)',
-            fontSize: '0.78rem', fontWeight: 600,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6
+            color: view === 'calendar' ? 'white' : 'var(--text-muted)'
           }}>
           <Calendar size={14} /> Calendario
         </button>
@@ -442,25 +495,25 @@ function GymPage() {
       {view === 'calendar' && (
         <>
           <div className="section-header">
-            <button style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
+            <button className="btn-ghost muted p-0"
               onClick={() => { if (calMonth === 0) { setCalMonth(11); setCalYear(calYear - 1) } else setCalMonth(calMonth - 1) }}>
               <ChevronLeft size={18} />
             </button>
             <span className="section-title">{MONTH_NAMES[calMonth]} {calYear}</span>
-            <button style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
+            <button className="btn-ghost muted p-0"
               onClick={() => { if (calMonth === 11) { setCalMonth(0); setCalYear(calYear + 1) } else setCalMonth(calMonth + 1) }}>
               <ChevronRight size={18} />
             </button>
           </div>
 
-          <div style={{ padding: '0 16px 8px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3, marginBottom: 4 }}>
+          <div className="px-16" style={{ paddingBottom: 8 }}>
+            <div className="grid-7 mb-2">
               {DAY_LABELS.map(d => (
-                <div key={d} style={{ textAlign: 'center', fontSize: '0.6rem', fontWeight: 700, color: 'var(--text-muted)', padding: '4px 0' }}>{d}</div>
+                <div key={d} className="text-center text-0.6 font-700 text-muted py-8">{d}</div>
               ))}
             </div>
             {calWeeks.map((week, wi) => (
-              <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3, marginBottom: 3 }}>
+              <div key={wi} className="grid-7" style={{ marginBottom: 3 }}>
                 {week.map((day, di) => {
                   if (day === null) return <div key={di} />
                   const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -528,7 +581,7 @@ function GymPage() {
             />
           ))}
           {workouts.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '30px 16px' }}>
+            <div className="empty-state">
               <div className="text-muted">Sin entrenos todavia</div>
             </div>
           )}
@@ -540,21 +593,18 @@ function GymPage() {
         <div className="modal-overlay" onClick={() => setModal(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>Nuevo entreno</h2>
-            <p className="text-xs text-muted" style={{ marginBottom: 16 }}>Elige una plantilla o empieza en blanco</p>
+            <p className="text-xs text-muted mb-4">Elige una plantilla o empieza en blanco</p>
             {templates.map(t => (
-              <div key={t.id} onClick={() => startWorkout(t)} style={{
-                padding: '14px', borderRadius: 'var(--radius-sm)', border: `1px solid ${t.color}40`,
-                background: `${t.color}08`, marginBottom: 8, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: 12, transition: 'background 0.15s'
-              }}>
-                <div style={{
-                  width: 40, height: 40, borderRadius: 10, background: `${t.color}20`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center'
+              <div key={t.id} onClick={() => startWorkout(t)}
+                className="flex items-center gap-12 cursor-pointer rounded-sm transition-all mb-2"
+                style={{ padding: 14, border: `1px solid ${t.color}40`, background: `${t.color}08` }}>
+                <div className="flex items-center justify-center" style={{
+                  width: 40, height: 40, borderRadius: 10, background: `${t.color}20`
                 }}>
                   <Dumbbell size={20} style={{ color: t.color }} />
                 </div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{t.name}</div>
+                <div className="flex-1">
+                  <div className="font-700 text-md">{t.name}</div>
                   <div className="text-xs text-muted">{t.exercises.length} ejercicios</div>
                 </div>
                 <Play size={16} style={{ color: t.color }} />
@@ -574,22 +624,19 @@ function GymPage() {
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>Plantillas</h2>
             {templates.map(t => (
-              <div key={t.id} style={{
-                padding: '12px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)',
-                marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center'
-              }}>
+              <div key={t.id} className="flex justify-between items-center rounded-sm border mb-2" style={{ padding: 12 }}>
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: t.color }} />
+                  <div className="font-700 text-0.85 flex items-center gap-6">
+                    <div className="color-dot" style={{ background: t.color }} />
                     {t.name}
                   </div>
                   <div className="text-xs text-muted">{t.exercises.length} ejercicios</div>
                 </div>
                 <div className="flex gap-2">
-                  <button className="btn btn-sm btn-outline" onClick={() => setTemplateForm({ ...t, exercises: [...t.exercises] })}>
+                  <button className="btn btn-sm btn-outline" onClick={() => { setTemplateForm({ ...t, exercises: [...t.exercises] }); clearErrors() }}>
                     <Edit3 size={12} />
                   </button>
-                  <button className="btn btn-sm" style={{ background: 'rgba(255,118,117,0.12)', color: 'var(--danger)', border: 'none' }}
+                  <button className="btn btn-sm border-none" style={{ background: 'rgba(255,118,117,0.12)', color: 'var(--danger)' }}
                     onClick={() => handleDeleteTemplate(t.id)}>
                     <Trash2 size={12} />
                   </button>
@@ -597,77 +644,79 @@ function GymPage() {
               </div>
             ))}
             <button className="btn btn-primary btn-block mt-2"
-              onClick={() => setTemplateForm({ id: null, name: '', color: '#ff6b6b', exercises: [] })}>
+              onClick={() => { setTemplateForm({ id: null, name: '', color: '#ff6b6b', exercises: [] }); clearErrors() }}>
               <Plus size={14} /> Nueva plantilla
             </button>
-            <button className="btn btn-outline btn-block mt-2" onClick={() => setModal(null)}>Cerrar</button>
+            <button className="btn btn-outline btn-block mt-2" onClick={() => { clearErrors(); setModal(null) }}>Cerrar</button>
           </div>
         </div>
       )}
 
-      {/* Template edit form */}
       {modal === 'templates' && templateForm && (
-        <div className="modal-overlay" onClick={() => setTemplateForm(null)}>
+        <div className="modal-overlay" onClick={() => { setTemplateForm(null); clearErrors() }}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>{templateForm.id ? 'Editar plantilla' : 'Nueva plantilla'}</h2>
             <div className="form-group">
               <label>Nombre</label>
-              <input value={templateForm.name} onChange={e => setTemplateForm({ ...templateForm, name: e.target.value })}
+              <input className={errors.name ? 'input-error' : ''} value={templateForm.name}
+                onChange={e => { setTemplateForm({ ...templateForm, name: e.target.value }); setErrors(prev => ({ ...prev, name: null })) }}
                 placeholder="Ej: Push" autoFocus />
+              {errors.name && <div className="error-text">{errors.name}</div>}
             </div>
             <div className="form-group">
               <label>Color</label>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+              <div className="flex gap-8 flex-wrap mt-1">
                 {COLORS.map(c => (
-                  <div key={c} onClick={() => setTemplateForm({ ...templateForm, color: c })} style={{
-                    width: 32, height: 32, borderRadius: 8, background: c, cursor: 'pointer',
-                    border: templateForm.color === c ? '3px solid white' : '3px solid transparent'
-                  }} />
+                  <div key={c} className="cursor-pointer rounded-sm" onClick={() => setTemplateForm({ ...templateForm, color: c })}
+                    style={{ width: 32, height: 32, background: c, border: templateForm.color === c ? '3px solid white' : '3px solid transparent' }} />
                 ))}
               </div>
             </div>
             <div className="form-group">
               <label>Ejercicios</label>
               {templateForm.exercises.map(ex => (
-                <div key={ex.id} style={{
-                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                  padding: '6px 0', borderBottom: '1px solid var(--border)', fontSize: '0.82rem'
-                }}>
+                <div key={ex.id} className="list-row justify-between text-0.82">
                   <span>{ex.name}</span>
                   <div className="flex items-center gap-2">
                     <span className="text-xs text-muted">{ex.defaultSets}x{ex.defaultReps}</span>
-                    <X size={14} style={{ cursor: 'pointer', color: 'var(--text-muted)' }} onClick={() => removeExFromTemplate(ex.id)} />
+                    <X size={14} className="cursor-pointer text-muted" onClick={() => removeExFromTemplate(ex.id)} />
                   </div>
                 </div>
               ))}
-              <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-                <input value={templateExForm.name} onChange={e => setTemplateExForm({ ...templateExForm, name: e.target.value })}
+              <div className="flex gap-6 mt-2">
+                <input className={errors.exName ? 'input-error' : ''} value={templateExForm.name}
+                  onChange={e => { setTemplateExForm({ ...templateExForm, name: e.target.value }); setErrors(prev => ({ ...prev, exName: null })) }}
                   placeholder="Nombre" style={{ flex: 2 }} onKeyDown={e => e.key === 'Enter' && addExToTemplate()} />
-                <input value={templateExForm.defaultSets} onChange={e => setTemplateExForm({ ...templateExForm, defaultSets: parseInt(e.target.value) || 0 })}
-                  placeholder="S" type="number" style={{ flex: 0.5, textAlign: 'center' }} />
-                <input value={templateExForm.defaultReps} onChange={e => setTemplateExForm({ ...templateExForm, defaultReps: e.target.value })}
+                <input className={`text-center ${errors.exSets ? 'input-error' : ''}`} value={templateExForm.defaultSets}
+                  onChange={e => { setTemplateExForm({ ...templateExForm, defaultSets: parseInt(e.target.value) || 0 }); setErrors(prev => ({ ...prev, exSets: null })) }}
+                  placeholder="S" type="number" style={{ flex: 0.5 }} />
+                <input className={errors.exReps ? 'input-error' : ''} value={templateExForm.defaultReps}
+                  onChange={e => { setTemplateExForm({ ...templateExForm, defaultReps: e.target.value }); setErrors(prev => ({ ...prev, exReps: null })) }}
                   placeholder="Reps" style={{ flex: 0.8 }} />
                 <button className="btn btn-sm btn-primary" onClick={addExToTemplate}><Plus size={14} /></button>
               </div>
+              {(errors.exName || errors.exSets || errors.exReps) && (
+                <div className="error-text mt-1">{errors.exName || errors.exSets || errors.exReps}</div>
+              )}
             </div>
             <div className="flex gap-2 mt-3">
-              <button className="btn btn-outline btn-block" onClick={() => setTemplateForm(null)}>Volver</button>
-              <button className="btn btn-primary btn-block" onClick={handleSaveTemplate}>Guardar</button>
+              <button className="btn btn-outline btn-block" onClick={() => { setTemplateForm(null); clearErrors() }}>Volver</button>
+              <button className="btn btn-primary btn-block" disabled={!templateForm.name.trim()} onClick={handleSaveTemplate}>Guardar</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Edit timer modal */}
       {modal === 'edit-timer' && editTimerForm && (
-        <div className="modal-overlay" onClick={() => { setEditTimerForm(null); setModal(null) }}>
+        <div className="modal-overlay" onClick={() => { setEditTimerForm(null); clearErrors(); setModal(null) }}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>Editar duracion</h2>
             <div className="form-group">
               <label>Hora inicio</label>
-              <input type="time" value={editTimerForm.startTime}
+              <input className={errors.startTime ? 'input-error' : ''} type="time" value={editTimerForm.startTime}
                 onChange={e => {
                   const st = e.target.value
+                  setErrors(prev => ({ ...prev, startTime: null, endTime: null }))
                   setEditTimerForm(prev => {
                     if (prev.endTime) {
                       const [sh, sm] = st.split(':').map(Number)
@@ -679,12 +728,14 @@ function GymPage() {
                     return { ...prev, startTime: st }
                   })
                 }} />
+              {errors.startTime && <div className="error-text">{errors.startTime}</div>}
             </div>
             <div className="form-group">
               <label>Hora fin</label>
-              <input type="time" value={editTimerForm.endTime}
+              <input className={errors.endTime ? 'input-error' : ''} type="time" value={editTimerForm.endTime}
                 onChange={e => {
                   const et = e.target.value
+                  setErrors(prev => ({ ...prev, endTime: null }))
                   setEditTimerForm(prev => {
                     const [sh, sm] = prev.startTime.split(':').map(Number)
                     const [eh, em] = et.split(':').map(Number)
@@ -693,18 +744,16 @@ function GymPage() {
                     return { ...prev, endTime: et, durationMin: dur }
                   })
                 }} />
+              {errors.endTime && <div className="error-text">{errors.endTime}</div>}
             </div>
-            <div style={{
-              padding: '10px 12px', borderRadius: 8, background: 'var(--bg-input)',
-              textAlign: 'center', marginBottom: 12
-            }}>
+            <div className="info-box">
               <span className="text-xs text-muted">Duracion: </span>
-              <span style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--primary-light)' }}>
+              <span className="font-800 text-lg text-primary-light">
                 {formatDuration(editTimerForm.durationMin)}
               </span>
             </div>
             <div className="flex gap-2">
-              <button className="btn btn-outline btn-block" onClick={() => { setEditTimerForm(null); setModal(null) }}>Cancelar</button>
+              <button className="btn btn-outline btn-block" onClick={() => { setEditTimerForm(null); clearErrors(); setModal(null) }}>Cancelar</button>
               <button className="btn btn-primary btn-block" onClick={handleEditTimer}>Guardar</button>
             </div>
           </div>
@@ -725,24 +774,18 @@ function ExerciseCard({ exercise, index, color, onAddSet, onRemoveSet, onRemoveE
   const lastSession = stats.length > 0 ? stats[0] : null
 
   return (
-    <div style={{
-      margin: '0 16px 10px', borderRadius: 'var(--radius)',
-      border: '1px solid var(--border)', background: 'var(--bg-card)', overflow: 'hidden'
-    }}>
-      <div style={{
-        padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        borderBottom: '1px solid var(--border)'
-      }}>
-        <div style={{ fontWeight: 700, fontSize: '0.88rem' }}>{exercise.name}</div>
+    <div className="mx-16 rounded border bg-card overflow-hidden" style={{ marginBottom: 10 }}>
+      <div className="flex justify-between items-center border" style={{ padding: '10px 14px', borderWidth: '0 0 1px 0' }}>
+        <div className="font-700" style={{ fontSize: '0.88rem' }}>{exercise.name}</div>
         <div className="flex items-center gap-2">
           {stats.length > 0 && (
-            <button className="btn btn-sm" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', padding: 2 }}
+            <button className="btn-ghost muted" style={{ padding: 2 }}
               onClick={() => setShowStats(!showStats)}>
               <TrendingUp size={14} />
             </button>
           )}
           {editable && (
-            <button className="btn btn-sm" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', padding: 2 }}
+            <button className="btn-ghost muted" style={{ padding: 2 }}
               onClick={() => onRemoveExercise(index)}>
               <Trash2 size={14} />
             </button>
@@ -753,8 +796,8 @@ function ExerciseCard({ exercise, index, color, onAddSet, onRemoveSet, onRemoveE
       {/* Previous stats */}
       {showStats && lastSession && (
         <div style={{ padding: '6px 14px', background: `${color}08`, borderBottom: '1px solid var(--border)' }}>
-          <div className="text-xs text-muted" style={{ marginBottom: 4 }}>Anterior ({lastSession.date})</div>
-          <div style={{ display: 'flex', gap: 12 }}>
+          <div className="text-xs text-muted mb-2">Anterior ({lastSession.date})</div>
+          <div className="flex gap-12">
             <span className="text-xs"><b style={{ color }}>{lastSession.maxWeight}kg</b> max</span>
             <span className="text-xs"><b>{lastSession.sets}</b> series</span>
             <span className="text-xs"><b>{stats.length}</b> veces hecho</span>
@@ -765,22 +808,22 @@ function ExerciseCard({ exercise, index, color, onAddSet, onRemoveSet, onRemoveE
       {/* Sets */}
       <div style={{ padding: '6px 14px' }}>
         {exercise.sets.length > 0 && (
-          <div style={{ display: 'flex', gap: 0, marginBottom: 4, padding: '4px 0', borderBottom: '1px solid var(--border)' }}>
-            <span className="text-xs text-muted" style={{ flex: 0.5, textAlign: 'center' }}>#</span>
-            <span className="text-xs text-muted" style={{ flex: 1, textAlign: 'center' }}>Reps</span>
-            <span className="text-xs text-muted" style={{ flex: 1, textAlign: 'center' }}>Peso</span>
+          <div className="flex mb-2 py-8" style={{ borderBottom: '1px solid var(--border)' }}>
+            <span className="text-xs text-muted text-center" style={{ flex: 0.5 }}>#</span>
+            <span className="text-xs text-muted text-center flex-1">Reps</span>
+            <span className="text-xs text-muted text-center flex-1">Peso</span>
             {editable && <span style={{ width: 24 }} />}
           </div>
         )}
         {exercise.sets.map((set, si) => (
-          <div key={si} style={{ display: 'flex', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
-            <span className="text-xs text-muted" style={{ flex: 0.5, textAlign: 'center' }}>{si + 1}</span>
-            <span style={{ flex: 1, textAlign: 'center', fontSize: '0.85rem', fontWeight: 600 }}>{set.reps}</span>
-            <span style={{ flex: 1, textAlign: 'center', fontSize: '0.85rem', fontWeight: 600 }}>
+          <div key={si} className="flex items-center" style={{ padding: '5px 0', borderBottom: '1px solid var(--border)' }}>
+            <span className="text-xs text-muted text-center" style={{ flex: 0.5 }}>{si + 1}</span>
+            <span className="text-0.85 font-600 text-center flex-1">{set.reps}</span>
+            <span className="text-0.85 font-600 text-center flex-1">
               {set.weight > 0 ? `${set.weight}kg` : '-'}
             </span>
             {editable && (
-              <button style={{ width: 24, background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 0 }}
+              <button className="btn-ghost muted p-0" style={{ width: 24 }}
                 onClick={() => onRemoveSet(index, si)}>
                 <X size={12} />
               </button>
@@ -791,13 +834,17 @@ function ExerciseCard({ exercise, index, color, onAddSet, onRemoveSet, onRemoveE
         {/* Add set */}
         {editable && (
           showAdd ? (
-            <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
-              <input value={reps} onChange={e => setReps(e.target.value)} placeholder="Reps" type="number"
-                style={{ flex: 1, textAlign: 'center', padding: '8px 6px' }} autoFocus />
-              <input value={weight} onChange={e => setWeight(e.target.value)} placeholder="Kg" type="number" step="0.5"
-                style={{ flex: 1, textAlign: 'center', padding: '8px 6px' }} />
-              <button className="btn btn-sm" style={{ background: color, color: 'white', border: 'none' }}
-                onClick={() => { onAddSet(index, reps, weight); setShowAdd(false); setWeight('') }}>
+            <div className="flex gap-6 items-center mt-2">
+              <input className="text-center flex-1" value={reps} onChange={e => setReps(e.target.value)}
+                placeholder="Reps" type="number" style={{ padding: '8px 6px' }} autoFocus />
+              <input className="text-center flex-1" value={weight} onChange={e => setWeight(e.target.value)}
+                placeholder="Kg" type="number" step="0.5" style={{ padding: '8px 6px' }} />
+              <button className="btn btn-sm border-none text-white" style={{ background: color }}
+                onClick={() => {
+                  if (!reps || parseInt(reps) < 0) return
+                  if (weight && parseFloat(weight) < 0) return
+                  onAddSet(index, reps, weight); setShowAdd(false); setWeight('')
+                }}>
                 <Check size={14} />
               </button>
               <button className="btn btn-sm btn-outline" onClick={() => setShowAdd(false)}>
@@ -831,43 +878,38 @@ function WorkoutCard({ workout, expanded, onToggle, onDelete, onEditTimer, getEx
       margin: '0 16px 10px', borderRadius: 'var(--radius)',
       border: `1px solid ${workout.color}30`, background: `${workout.color}05`, overflow: 'hidden'
     }}>
-      <div onClick={onToggle} style={{
-        padding: '12px 14px', cursor: 'pointer',
-        display: 'flex', alignItems: 'center', gap: 12
-      }}>
-        <div style={{
-          width: 42, height: 42, borderRadius: 12, background: `${workout.color}18`,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+      <div className="flex items-center gap-12 cursor-pointer" onClick={onToggle} style={{ padding: '12px 14px' }}>
+        <div className="flex items-center justify-center flex-shrink-0" style={{
+          width: 42, height: 42, borderRadius: 12, background: `${workout.color}18`
         }}>
           <Dumbbell size={20} style={{ color: workout.color }} />
         </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>{workout.templateName}</div>
+        <div className="flex-1 min-w-0">
+          <div className="font-700 text-md">{workout.templateName}</div>
           <div className="text-xs text-muted">{dateLabel} · {workout.startTime}-{workout.endTime}</div>
         </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: '0.9rem', fontWeight: 700, color: workout.color }}>
+        <div className="text-right">
+          <div className="text-md font-700" style={{ color: workout.color }}>
             {formatDuration(workout.durationMin)}
           </div>
           <div className="text-xs text-muted">{totalSets} series</div>
         </div>
-        {expanded ? <ChevronUp size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} />}
+        {expanded ? <ChevronUp size={16} className="text-muted" /> : <ChevronDown size={16} className="text-muted" />}
       </div>
 
       {expanded && (
         <div style={{ borderTop: `1px solid ${workout.color}20` }}>
-          {/* Summary KPIs */}
-          <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid var(--border)' }}>
+          <div className="flex" style={{ borderBottom: '1px solid var(--border)' }}>
             {[
               { label: 'Volumen', value: `${(totalVol / 1000).toFixed(1)}k kg` },
               { label: 'Series', value: totalSets },
               { label: 'Ejercicios', value: workout.exercises.length },
             ].map((kpi, i) => (
-              <div key={i} style={{
-                flex: 1, padding: '10px', textAlign: 'center',
+              <div key={i} className="flex-1 text-center" style={{
+                padding: 10,
                 borderRight: i < 2 ? '1px solid var(--border)' : 'none'
               }}>
-                <div style={{ fontSize: '0.95rem', fontWeight: 700 }}>{kpi.value}</div>
+                <div className="font-700" style={{ fontSize: '0.95rem' }}>{kpi.value}</div>
                 <div className="text-xs text-muted">{kpi.label}</div>
               </div>
             ))}
@@ -879,21 +921,18 @@ function WorkoutCard({ workout, expanded, onToggle, onDelete, onEditTimer, getEx
             const stats = getExerciseStats(ex.name)
             return (
               <div key={i} style={{ padding: '8px 14px', borderBottom: '1px solid var(--border)' }}>
-                <div className="flex justify-between items-center" style={{ marginBottom: 4 }}>
-                  <span style={{ fontWeight: 600, fontSize: '0.82rem' }}>{ex.name}</span>
+                <div className="flex justify-between items-center mb-2">
+                  <span className="font-600 text-0.82">{ex.name}</span>
                   <div className="flex gap-2">
                     {maxW > 0 && (
-                      <span className="text-xs" style={{ color: workout.color, fontWeight: 700 }}>{maxW}kg</span>
+                      <span className="text-xs font-700" style={{ color: workout.color }}>{maxW}kg</span>
                     )}
                     <span className="text-xs text-muted">{stats.length}x</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <div className="flex gap-6 flex-wrap">
                   {ex.sets.map((s, si) => (
-                    <span key={si} style={{
-                      padding: '2px 8px', borderRadius: 6, fontSize: '0.68rem',
-                      background: 'var(--bg-input)', fontWeight: 600, fontVariantNumeric: 'tabular-nums'
-                    }}>
+                    <span key={si} className="text-0.68 font-600 tabular-nums bg-input rounded-sm" style={{ padding: '2px 8px' }}>
                       {s.reps}x{s.weight > 0 ? `${s.weight}kg` : '-'}
                     </span>
                   ))}
@@ -902,12 +941,11 @@ function WorkoutCard({ workout, expanded, onToggle, onDelete, onEditTimer, getEx
             )
           })}
 
-          {/* Actions */}
-          <div style={{ padding: '10px 14px', display: 'flex', gap: 8 }}>
-            <button className="btn btn-sm btn-outline" style={{ flex: 1 }} onClick={() => onEditTimer(workout)}>
+          <div className="flex gap-8" style={{ padding: '10px 14px' }}>
+            <button className="btn btn-sm btn-outline flex-1" onClick={() => onEditTimer(workout)}>
               <Clock size={13} /> Editar tiempo
             </button>
-            <button className="btn btn-sm" style={{ flex: 1, background: 'rgba(255,118,117,0.12)', color: 'var(--danger)', border: 'none' }}
+            <button className="btn btn-sm flex-1 border-none" style={{ background: 'rgba(255,118,117,0.12)', color: 'var(--danger)' }}
               onClick={() => onDelete(workout.id)}>
               <Trash2 size={13} /> Borrar
             </button>

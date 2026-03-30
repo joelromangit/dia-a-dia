@@ -10,23 +10,20 @@ import { sleepDb } from '../lib/db'
 const DAY_LABELS = ['D', 'L', 'M', 'X', 'J', 'V', 'S']
 const DAY_NAMES = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado']
 
-// Calculate hours slept from bedtime/wakeup strings
 function calcHours(bedtime, wakeup) {
   const [bh, bm] = bedtime.split(':').map(Number)
   const [wh, wm] = wakeup.split(':').map(Number)
   let bedMin = bh * 60 + bm
   let wakeMin = wh * 60 + wm
-  if (wakeMin <= bedMin) wakeMin += 24 * 60 // crossed midnight
+  if (wakeMin <= bedMin) wakeMin += 24 * 60
   return parseFloat(((wakeMin - bedMin) / 60).toFixed(2))
 }
 
-// Get the schedule that applies to a given date
 function getScheduleForDate(date, schedules) {
   const dayOfWeek = new Date(date + 'T12:00:00').getDay()
   return schedules.find(s => s.days.includes(dayOfWeek)) || null
 }
 
-// Format date nicely
 function formatDate(dateStr) {
   const d = new Date(dateStr + 'T12:00:00')
   const day = d.getDate()
@@ -39,7 +36,6 @@ function getDayName(dateStr) {
   return DAY_NAMES[d.getDay()]
 }
 
-// Build calendar weeks for a month
 function getCalendarWeeks(year, month) {
   const first = new Date(year, month, 1)
   const last = new Date(year, month + 1, 0)
@@ -58,9 +54,33 @@ function getCalendarWeeks(year, month) {
 
 const MONTH_NAMES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre']
 
+const TIME_RE = /^\d{2}:\d{2}$/
+
+function validateManualForm(form, todayStr) {
+  const errors = {}
+  if (!form.date || !form.date.trim()) errors.date = 'La fecha es obligatoria'
+  else if (form.date > todayStr) errors.date = 'La fecha no puede ser futura'
+  if (!form.bedtime || !form.bedtime.trim()) errors.bedtime = 'La hora de dormir es obligatoria'
+  else if (!TIME_RE.test(form.bedtime)) errors.bedtime = 'Formato invalido (HH:MM)'
+  if (!form.wakeup || !form.wakeup.trim()) errors.wakeup = 'La hora de despertar es obligatoria'
+  else if (!TIME_RE.test(form.wakeup)) errors.wakeup = 'Formato invalido (HH:MM)'
+  return errors
+}
+
+function validateScheduleForm(form) {
+  const errors = {}
+  if (!form.name || !form.name.trim()) errors.name = 'El nombre es obligatorio'
+  if (!form.days || form.days.length === 0) errors.days = 'Selecciona al menos un dia'
+  if (!form.bedtime || !form.bedtime.trim()) errors.bedtime = 'La hora de dormir es obligatoria'
+  else if (!TIME_RE.test(form.bedtime)) errors.bedtime = 'Formato invalido (HH:MM)'
+  if (!form.wakeup || !form.wakeup.trim()) errors.wakeup = 'La hora de despertar es obligatoria'
+  else if (!TIME_RE.test(form.wakeup)) errors.wakeup = 'Formato invalido (HH:MM)'
+  return errors
+}
+
 function SleepPage() {
-  const [records, setRecords, { loading: loadingRecords }] = useDb(sleepDb.getRecords, mockSleep.records)
-  const [schedules, setSchedules, { loading: loadingSchedules }] = useDb(sleepDb.getSchedules, mockSleep.schedules)
+  const [records, setRecords, { loading: loadingRecords, error: errorRecords }] = useDb(sleepDb.getRecords, mockSleep.records)
+  const [schedules, setSchedules, { loading: loadingSchedules, error: errorSchedules }] = useDb(sleepDb.getSchedules, mockSleep.schedules)
   const [sleeping, setSleeping] = useState(false)
   const [startTime, setStartTime] = useState(null)
   const [elapsed, setElapsed] = useState(0)
@@ -69,22 +89,24 @@ function SleepPage() {
   const [manualForm, setManualForm] = useState({ date: '', bedtime: '23:00', wakeup: '07:00' })
   const [editForm, setEditForm] = useState(null)
   const [scheduleForm, setScheduleForm] = useState(null)
+  const [showError, setShowError] = useState(true)
+  const [formErrors, setFormErrors] = useState({})
   const intervalRef = useRef(null)
 
-  // Calendar month navigation
+  const loading = loadingRecords || loadingSchedules
+  const error = errorRecords || errorSchedules
+
   const today = new Date()
   const [calMonth, setCalMonth] = useState(today.getMonth())
   const [calYear, setCalYear] = useState(today.getFullYear())
   const calWeeks = useMemo(() => getCalendarWeeks(calYear, calMonth), [calYear, calMonth])
 
-  // Records indexed by date
   const recordMap = useMemo(() => {
     const m = {}
     records.forEach(r => { m[r.date] = r })
     return m
   }, [records])
 
-  // Timer
   useEffect(() => {
     if (sleeping && startTime) {
       intervalRef.current = setInterval(() => {
@@ -93,6 +115,17 @@ function SleepPage() {
     }
     return () => clearInterval(intervalRef.current)
   }, [sleeping, startTime])
+
+  useEffect(() => {
+    if (error) setShowError(true)
+  }, [error])
+
+  const closeModal = () => {
+    setModal(null)
+    setScheduleForm(null)
+    setEditForm(null)
+    setFormErrors({})
+  }
 
   const formatTimer = (seconds) => {
     const h = Math.floor(seconds / 3600)
@@ -131,35 +164,41 @@ function SleepPage() {
     setStartTime(null)
   }
 
-  // Manual add
+  const todayStr = today.toISOString().split('T')[0]
+
   const handleManualAdd = () => {
-    if (!manualForm.date || !manualForm.bedtime || !manualForm.wakeup) return
+    const errs = validateManualForm(manualForm, todayStr)
+    setFormErrors(errs)
+    if (Object.keys(errs).length > 0) return
     const newRec = { id: Date.now(), ...manualForm }
     setRecords(prev => [newRec, ...prev.filter(r => r.date !== manualForm.date)])
     sleepDb.addRecord(manualForm)
     setManualForm({ date: '', bedtime: '23:00', wakeup: '07:00' })
-    setModal(null)
+    closeModal()
   }
 
-  // Edit
   const handleEdit = () => {
     if (!editForm) return
+    const errs = validateManualForm(editForm, todayStr)
+    setFormErrors(errs)
+    if (Object.keys(errs).length > 0) return
     setRecords(records.map(r => r.id === editForm.id ? { ...editForm } : r))
     sleepDb.updateRecord(editForm.id, { date: editForm.date, bedtime: editForm.bedtime, wakeup: editForm.wakeup })
     setEditForm(null)
-    setModal(null)
+    closeModal()
   }
 
-  // Delete
   const handleDelete = (id) => {
     setRecords(records.filter(r => r.id !== id))
     sleepDb.deleteRecord(id)
     setSelectedDate(null)
   }
 
-  // Schedules
   const handleSaveSchedule = () => {
-    if (!scheduleForm || !scheduleForm.name || scheduleForm.days.length === 0) return
+    if (!scheduleForm) return
+    const errs = validateScheduleForm(scheduleForm)
+    setFormErrors(errs)
+    if (Object.keys(errs).length > 0) return
     if (scheduleForm.id) {
       setSchedules(schedules.map(s => s.id === scheduleForm.id ? { ...scheduleForm } : s))
       sleepDb.updateSchedule(scheduleForm.id, scheduleForm)
@@ -168,7 +207,7 @@ function SleepPage() {
       sleepDb.addSchedule(scheduleForm)
     }
     setScheduleForm(null)
-    setModal(null)
+    closeModal()
   }
 
   const handleDeleteSchedule = (id) => {
@@ -176,7 +215,6 @@ function SleepPage() {
     sleepDb.deleteSchedule(id)
   }
 
-  // KPIs
   const recentRecords = records.slice(0, 7)
   const avgHours = recentRecords.length > 0
     ? (recentRecords.reduce((a, r) => a + calcHours(r.bedtime, r.wakeup), 0) / recentRecords.length).toFixed(1)
@@ -194,11 +232,9 @@ function SleepPage() {
       }).length / recentRecords.length) * 100)
     : 0
 
-  // Selected date detail
   const selRecord = selectedDate ? recordMap[selectedDate] : null
   const selSchedule = selectedDate ? getScheduleForDate(selectedDate, schedules) : null
 
-  // Calendar cell color
   const getCellStatus = (dateStr) => {
     const rec = recordMap[dateStr]
     if (!rec) return 'empty'
@@ -209,7 +245,19 @@ function SleepPage() {
     return 'bad'
   }
 
-  const todayStr = today.toISOString().split('T')[0]
+  const manualFormHasErrors = Object.keys(formErrors).length > 0
+  const isManualFormInvalid = !manualForm.date?.trim() || !manualForm.bedtime?.trim() || !manualForm.wakeup?.trim()
+  const isEditFormInvalid = !editForm?.date?.trim() || !editForm?.bedtime?.trim() || !editForm?.wakeup?.trim()
+  const isScheduleFormInvalid = !scheduleForm?.name?.trim() || !scheduleForm?.days?.length || !scheduleForm?.bedtime?.trim() || !scheduleForm?.wakeup?.trim()
+
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <div className="spinner" />
+        <p>Cargando...</p>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -220,11 +268,12 @@ function SleepPage() {
             <p>Controla tu descanso</p>
           </div>
           <div className="flex gap-2">
-            <button className="btn btn-outline btn-sm" onClick={() => setModal('schedules')}>
+            <button className="btn btn-outline btn-sm" onClick={() => { setFormErrors({}); setModal('schedules') }}>
               <Settings size={14} />
             </button>
             <button className="btn btn-outline btn-sm" onClick={() => {
               setManualForm({ date: todayStr, bedtime: '23:00', wakeup: '07:00' })
+              setFormErrors({})
               setModal('manual')
             }}>
               <Plus size={14} />
@@ -233,7 +282,13 @@ function SleepPage() {
         </div>
       </div>
 
-      {/* Timer */}
+      {error && showError && (
+        <div className="error-banner">
+          <span>No se pudo conectar con el servidor. Usando datos locales.</span>
+          <button className="dismiss" onClick={() => setShowError(false)}>×</button>
+        </div>
+      )}
+
       <div className="sleep-timer">
         <div className="timer-label">
           {sleeping ? 'Durmiendo...' : 'Listo para dormir'}
@@ -244,13 +299,13 @@ function SleepPage() {
           {sleeping ? 'Despertar' : 'Dormir'}
         </button>
         {sleeping && (
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+          <div className="flex-col items-center gap-6">
             <div className="text-xs text-muted">
               Inicio: {new Date(startTime).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
             </div>
             <button
-              className="btn btn-sm"
-              style={{ background: 'rgba(255,118,117,0.15)', color: 'var(--danger)', border: 'none' }}
+              className="btn btn-sm border-none"
+              style={{ background: 'rgba(255,118,117,0.15)', color: 'var(--danger)' }}
               onClick={handleCancel}
             >
               <X size={12} /> Cancelar
@@ -259,7 +314,6 @@ function SleepPage() {
         )}
       </div>
 
-      {/* KPIs */}
       <div className="kpi-grid">
         <div className="kpi-card">
           <div className="kpi-value" style={{ color: parseFloat(avgHours) >= 7.5 ? 'var(--success)' : 'var(--warning)' }}>
@@ -275,22 +329,13 @@ function SleepPage() {
         </div>
       </div>
 
-      {/* Schedules summary */}
       {schedules.length > 0 && (
-        <div style={{ padding: '0 16px 8px', display: 'flex', gap: 8, overflowX: 'auto' }}>
+        <div className="px-16 flex gap-8 overflow-x-auto" style={{ paddingBottom: 8 }}>
           {schedules.map(s => (
-            <div key={s.id} style={{
-              padding: '6px 12px',
-              borderRadius: 10,
-              background: 'var(--bg-card)',
-              border: '1px solid var(--border)',
-              fontSize: '0.72rem',
-              whiteSpace: 'nowrap',
-              flexShrink: 0
-            }}>
-              <span style={{ fontWeight: 700 }}>{s.name}</span>
+            <div key={s.id} className="bg-card border rounded-sm flex-shrink-0 text-nowrap" style={{ padding: '6px 12px', fontSize: '0.72rem' }}>
+              <span className="font-700">{s.name}</span>
               <span className="text-muted"> {s.bedtime} → {s.wakeup}</span>
-              <span style={{ color: 'var(--primary-light)', marginLeft: 6 }}>
+              <span className="text-primary-light" style={{ marginLeft: 6 }}>
                 {calcHours(s.bedtime, s.wakeup)}h
               </span>
             </div>
@@ -298,34 +343,28 @@ function SleepPage() {
         </div>
       )}
 
-      {/* Calendar */}
       <div className="section-header">
-        <button className="btn btn-sm" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', padding: 0 }}
+        <button className="btn-ghost muted p-0"
           onClick={() => { if (calMonth === 0) { setCalMonth(11); setCalYear(calYear - 1) } else setCalMonth(calMonth - 1) }}>
           <ChevronLeft size={18} />
         </button>
         <span className="section-title" style={{ textTransform: 'capitalize' }}>
           {MONTH_NAMES[calMonth]} {calYear}
         </span>
-        <button className="btn btn-sm" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', padding: 0 }}
+        <button className="btn-ghost muted p-0"
           onClick={() => { if (calMonth === 11) { setCalMonth(0); setCalYear(calYear + 1) } else setCalMonth(calMonth + 1) }}>
           <ChevronRight size={18} />
         </button>
       </div>
 
-      <div style={{ padding: '0 16px 4px' }}>
-        {/* Day headers */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3, marginBottom: 4 }}>
+      <div className="px-16" style={{ paddingBottom: 4 }}>
+        <div className="grid-7 mb-2">
           {DAY_LABELS.map(d => (
-            <div key={d} style={{
-              textAlign: 'center', fontSize: '0.6rem', fontWeight: 700,
-              color: 'var(--text-muted)', padding: '4px 0', textTransform: 'uppercase'
-            }}>{d}</div>
+            <div key={d} className="text-center text-0\.6 font-700 text-muted text-uppercase py-8">{d}</div>
           ))}
         </div>
-        {/* Weeks */}
         {calWeeks.map((week, wi) => (
-          <div key={wi} style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 3, marginBottom: 3 }}>
+          <div key={wi} className="grid-7" style={{ marginBottom: 3 }}>
             {week.map((day, di) => {
               if (day === null) return <div key={di} />
               const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
@@ -345,18 +384,13 @@ function SleepPage() {
               return (
                 <div
                   key={di}
+                  className="flex-col items-center justify-center cursor-pointer transition-all"
                   onClick={() => setSelectedDate(dateStr === selectedDate ? null : dateStr)}
                   style={{
                     aspectRatio: '1',
                     borderRadius: 8,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
                     background: bg,
                     border,
-                    cursor: 'pointer',
-                    transition: 'all 0.15s',
                     position: 'relative'
                   }}
                 >
@@ -382,38 +416,24 @@ function SleepPage() {
         ))}
       </div>
 
-      {/* Legend */}
-      <div style={{ padding: '4px 16px 8px', display: 'flex', justifyContent: 'center', gap: 14 }}>
+      <div className="flex justify-center gap-14 py-8 px-16">
         {[
           { color: 'rgba(0,206,201,0.5)', label: 'Cumplido' },
           { color: 'rgba(253,203,110,0.5)', label: 'Casi' },
           { color: 'rgba(255,118,117,0.5)', label: 'Fallo' },
         ].map(l => (
-          <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <div key={l.label} className="flex items-center gap-1">
             <div style={{ width: 10, height: 10, borderRadius: 3, background: l.color }} />
-            <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>{l.label}</span>
+            <span className="text-0\.6 text-muted">{l.label}</span>
           </div>
         ))}
       </div>
 
-      {/* Selected date detail */}
       {selectedDate && (
-        <div style={{
-          margin: '0 16px 12px',
-          borderRadius: 'var(--radius)',
-          border: '1px solid var(--border)',
-          background: 'var(--bg-card)',
-          overflow: 'hidden'
-        }}>
-          <div style={{
-            padding: '12px 16px',
-            borderBottom: '1px solid var(--border)',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center'
-          }}>
+        <div className="rounded border bg-card overflow-hidden mx-16 mb-3">
+          <div className="flex justify-between items-center border" style={{ padding: '12px 16px', borderLeft: 'none', borderRight: 'none', borderTop: 'none' }}>
             <div>
-              <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>
+              <div className="text-md font-700">
                 {getDayName(selectedDate)}, {formatDate(selectedDate)}
               </div>
               {selSchedule && (
@@ -425,6 +445,7 @@ function SleepPage() {
             {!selRecord && (
               <button className="btn btn-sm btn-primary" onClick={() => {
                 setManualForm({ date: selectedDate, bedtime: selSchedule?.bedtime || '23:00', wakeup: selSchedule?.wakeup || '07:00' })
+                setFormErrors({})
                 setModal('manual')
               }}>
                 <Plus size={12} /> Anadir
@@ -441,59 +462,38 @@ function SleepPage() {
 
             return (
               <div style={{ padding: '14px 16px' }}>
-                {/* Main time display */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 16,
-                  marginBottom: 14
-                }}>
-                  {/* Bedtime */}
-                  <div style={{ textAlign: 'center' }}>
+                <div className="flex items-center justify-center gap-16 mb-3">
+                  <div className="text-center">
                     <Moon size={16} style={{ color: 'var(--primary-light)', marginBottom: 4 }} />
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+                    <div className="font-800 tabular-nums" style={{ fontSize: '1.4rem' }}>
                       {selRecord.bedtime}
                     </div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Dormir</div>
+                    <div className="text-0\.6 text-muted text-uppercase font-600">Dormir</div>
                   </div>
 
-                  {/* Arrow + hours */}
-                  <div style={{ textAlign: 'center' }}>
-                    <div style={{
-                      fontSize: '1.8rem',
-                      fontWeight: 900,
-                      color: statusColor,
-                      lineHeight: 1
-                    }}>
+                  <div className="text-center">
+                    <div className="font-900 leading-1" style={{ fontSize: '1.8rem', color: statusColor }}>
                       {hours.toFixed(1)}h
                     </div>
-                    <div style={{
-                      fontSize: '0.65rem',
-                      fontWeight: 700,
-                      color: statusColor,
-                      marginTop: 2
-                    }}>
+                    <div className="text-0\.65 font-700 mt-1" style={{ color: statusColor }}>
                       {diff >= 0 ? '+' : ''}{diff.toFixed(1)}h vs obj
                     </div>
                   </div>
 
-                  {/* Wakeup */}
-                  <div style={{ textAlign: 'center' }}>
+                  <div className="text-center">
                     <Sun size={16} style={{ color: 'var(--warning)', marginBottom: 4 }} />
-                    <div style={{ fontSize: '1.4rem', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
+                    <div className="font-800 tabular-nums" style={{ fontSize: '1.4rem' }}>
                       {selRecord.wakeup}
                     </div>
-                    <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Despertar</div>
+                    <div className="text-0\.6 text-muted text-uppercase font-600">Despertar</div>
                   </div>
                 </div>
 
-                {/* Visual bar: actual vs goal */}
                 {selSchedule && (
-                  <div style={{ marginBottom: 12 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                  <div className="mb-3">
+                    <div className="flex justify-between mb-2">
                       <span className="text-xs text-muted">Objetivo: {goalH}h</span>
-                      <span className="text-xs" style={{ color: statusColor, fontWeight: 700 }}>
+                      <span className="text-xs font-700" style={{ color: statusColor }}>
                         {status === 'good' ? 'Cumplido' : status === 'warn' ? 'Casi' : 'No cumplido'}
                       </span>
                     </div>
@@ -507,40 +507,31 @@ function SleepPage() {
                   </div>
                 )}
 
-                {/* Schedule comparison */}
                 {selSchedule && (
-                  <div style={{
-                    display: 'flex', gap: 8, marginBottom: 12
-                  }}>
-                    <div style={{
-                      flex: 1, padding: '6px 10px', borderRadius: 8,
-                      background: 'var(--bg-input)', fontSize: '0.72rem'
-                    }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 2 }}>Hora dormir</div>
-                      <span style={{ fontWeight: 700 }}>{selRecord.bedtime}</span>
+                  <div className="flex gap-8 mb-3">
+                    <div className="flex-1 bg-input rounded-sm" style={{ padding: '6px 10px', fontSize: '0.72rem' }}>
+                      <div className="text-xs text-muted mb-2">Hora dormir</div>
+                      <span className="font-700">{selRecord.bedtime}</span>
                       <span className="text-muted"> / {selSchedule.bedtime}</span>
                     </div>
-                    <div style={{
-                      flex: 1, padding: '6px 10px', borderRadius: 8,
-                      background: 'var(--bg-input)', fontSize: '0.72rem'
-                    }}>
-                      <div className="text-xs text-muted" style={{ marginBottom: 2 }}>Hora despertar</div>
-                      <span style={{ fontWeight: 700 }}>{selRecord.wakeup}</span>
+                    <div className="flex-1 bg-input rounded-sm" style={{ padding: '6px 10px', fontSize: '0.72rem' }}>
+                      <div className="text-xs text-muted mb-2">Hora despertar</div>
+                      <span className="font-700">{selRecord.wakeup}</span>
                       <span className="text-muted"> / {selSchedule.wakeup}</span>
                     </div>
                   </div>
                 )}
 
-                {/* Actions */}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button className="btn btn-sm btn-outline" style={{ flex: 1 }} onClick={() => {
+                <div className="flex gap-8">
+                  <button className="btn btn-sm btn-outline flex-1" onClick={() => {
                     setEditForm({ ...selRecord })
+                    setFormErrors({})
                     setModal('edit')
                   }}>
                     <Edit3 size={13} /> Editar
                   </button>
-                  <button className="btn btn-sm" style={{
-                    flex: 1, background: 'rgba(255,118,117,0.12)', color: 'var(--danger)', border: 'none'
+                  <button className="btn btn-sm flex-1 border-none" style={{
+                    background: 'rgba(255,118,117,0.12)', color: 'var(--danger)'
                   }} onClick={() => handleDelete(selRecord.id)}>
                     <Trash2 size={13} /> Borrar
                   </button>
@@ -548,124 +539,137 @@ function SleepPage() {
               </div>
             )
           })() : (
-            <div style={{ padding: '20px 16px', textAlign: 'center' }}>
+            <div className="text-center" style={{ padding: '20px 16px' }}>
               <div className="text-xs text-muted">Sin registro este dia</div>
             </div>
           )}
         </div>
       )}
 
-      {/* Manual add modal */}
       {modal === 'manual' && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
+        <div className="modal-overlay" onClick={closeModal}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>Anadir registro</h2>
             <div className="form-group">
               <label>Fecha</label>
               <input type="date" value={manualForm.date}
-                onChange={e => setManualForm({ ...manualForm, date: e.target.value })} />
+                className={formErrors.date ? 'input-error' : ''}
+                onChange={e => {
+                  setManualForm({ ...manualForm, date: e.target.value })
+                  setFormErrors(prev => { const { date, ...rest } = prev; return rest })
+                }} />
+              {formErrors.date && <div className="error-text">{formErrors.date}</div>}
             </div>
             <div className="form-group">
               <label>Hora de dormir</label>
               <input type="time" value={manualForm.bedtime}
-                onChange={e => setManualForm({ ...manualForm, bedtime: e.target.value })} />
+                className={formErrors.bedtime ? 'input-error' : ''}
+                onChange={e => {
+                  setManualForm({ ...manualForm, bedtime: e.target.value })
+                  setFormErrors(prev => { const { bedtime, ...rest } = prev; return rest })
+                }} />
+              {formErrors.bedtime && <div className="error-text">{formErrors.bedtime}</div>}
             </div>
             <div className="form-group">
               <label>Hora de despertar</label>
               <input type="time" value={manualForm.wakeup}
-                onChange={e => setManualForm({ ...manualForm, wakeup: e.target.value })} />
+                className={formErrors.wakeup ? 'input-error' : ''}
+                onChange={e => {
+                  setManualForm({ ...manualForm, wakeup: e.target.value })
+                  setFormErrors(prev => { const { wakeup, ...rest } = prev; return rest })
+                }} />
+              {formErrors.wakeup && <div className="error-text">{formErrors.wakeup}</div>}
             </div>
             {manualForm.bedtime && manualForm.wakeup && (
-              <div style={{
-                padding: '10px 12px', borderRadius: 8, background: 'var(--bg-input)',
-                textAlign: 'center', marginBottom: 12
-              }}>
+              <div className="info-box">
                 <span className="text-xs text-muted">Horas dormidas: </span>
-                <span style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--primary-light)' }}>
+                <span className="font-800 text-lg text-primary-light">
                   {calcHours(manualForm.bedtime, manualForm.wakeup).toFixed(1)}h
                 </span>
               </div>
             )}
             <div className="flex gap-2">
-              <button className="btn btn-outline btn-block" onClick={() => setModal(null)}>Cancelar</button>
-              <button className="btn btn-primary btn-block" onClick={handleManualAdd}>Guardar</button>
+              <button className="btn btn-outline btn-block" onClick={closeModal}>Cancelar</button>
+              <button className="btn btn-primary btn-block" disabled={isManualFormInvalid} onClick={handleManualAdd}>Guardar</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Edit modal */}
       {modal === 'edit' && editForm && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
+        <div className="modal-overlay" onClick={closeModal}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>Editar registro</h2>
             <div className="form-group">
               <label>Fecha</label>
               <input type="date" value={editForm.date}
-                onChange={e => setEditForm({ ...editForm, date: e.target.value })} />
+                className={formErrors.date ? 'input-error' : ''}
+                onChange={e => {
+                  setEditForm({ ...editForm, date: e.target.value })
+                  setFormErrors(prev => { const { date, ...rest } = prev; return rest })
+                }} />
+              {formErrors.date && <div className="error-text">{formErrors.date}</div>}
             </div>
             <div className="form-group">
               <label>Hora de dormir</label>
               <input type="time" value={editForm.bedtime}
-                onChange={e => setEditForm({ ...editForm, bedtime: e.target.value })} />
+                className={formErrors.bedtime ? 'input-error' : ''}
+                onChange={e => {
+                  setEditForm({ ...editForm, bedtime: e.target.value })
+                  setFormErrors(prev => { const { bedtime, ...rest } = prev; return rest })
+                }} />
+              {formErrors.bedtime && <div className="error-text">{formErrors.bedtime}</div>}
             </div>
             <div className="form-group">
               <label>Hora de despertar</label>
               <input type="time" value={editForm.wakeup}
-                onChange={e => setEditForm({ ...editForm, wakeup: e.target.value })} />
+                className={formErrors.wakeup ? 'input-error' : ''}
+                onChange={e => {
+                  setEditForm({ ...editForm, wakeup: e.target.value })
+                  setFormErrors(prev => { const { wakeup, ...rest } = prev; return rest })
+                }} />
+              {formErrors.wakeup && <div className="error-text">{formErrors.wakeup}</div>}
             </div>
             {editForm.bedtime && editForm.wakeup && (
-              <div style={{
-                padding: '10px 12px', borderRadius: 8, background: 'var(--bg-input)',
-                textAlign: 'center', marginBottom: 12
-              }}>
+              <div className="info-box">
                 <span className="text-xs text-muted">Horas dormidas: </span>
-                <span style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--primary-light)' }}>
+                <span className="font-800 text-lg text-primary-light">
                   {calcHours(editForm.bedtime, editForm.wakeup).toFixed(1)}h
                 </span>
               </div>
             )}
             <div className="flex gap-2">
-              <button className="btn btn-outline btn-block" onClick={() => setModal(null)}>Cancelar</button>
-              <button className="btn btn-primary btn-block" onClick={handleEdit}>Guardar</button>
+              <button className="btn btn-outline btn-block" onClick={closeModal}>Cancelar</button>
+              <button className="btn btn-primary btn-block" disabled={isEditFormInvalid} onClick={handleEdit}>Guardar</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Schedules config modal */}
       {modal === 'schedules' && !scheduleForm && (
-        <div className="modal-overlay" onClick={() => setModal(null)}>
+        <div className="modal-overlay" onClick={closeModal}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>Horarios de sueno</h2>
-            <p className="text-xs text-muted" style={{ marginBottom: 16 }}>
+            <p className="text-xs text-muted mb-4">
               Configura tus objetivos por dias. Las horas objetivo se calculan automaticamente.
             </p>
 
             {schedules.map(s => (
-              <div key={s.id} style={{
-                padding: '12px',
-                borderRadius: 'var(--radius-sm)',
-                border: '1px solid var(--border)',
-                marginBottom: 10,
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}>
+              <div key={s.id} className="flex justify-between items-center border rounded-sm" style={{ padding: 12, marginBottom: 10 }}>
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.85rem' }}>{s.name}</div>
-                  <div className="text-xs text-muted" style={{ marginTop: 2 }}>
+                  <div className="text-0\.85 font-700">{s.name}</div>
+                  <div className="text-xs text-muted mt-1">
                     {s.days.map(d => DAY_LABELS[d]).join(', ')} · {s.bedtime} → {s.wakeup}
                   </div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--primary-light)', marginTop: 2 }}>
+                  <div className="text-0\.75 font-700 text-primary-light mt-1">
                     {calcHours(s.bedtime, s.wakeup)}h objetivo
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <button className="btn btn-sm btn-outline" onClick={() => setScheduleForm({ ...s })}>
+                  <button className="btn btn-sm btn-outline" onClick={() => { setScheduleForm({ ...s }); setFormErrors({}) }}>
                     <Edit3 size={12} />
                   </button>
-                  <button className="btn btn-sm" style={{ background: 'rgba(255,118,117,0.12)', color: 'var(--danger)', border: 'none' }}
+                  <button className="btn btn-sm border-none" style={{ background: 'rgba(255,118,117,0.12)', color: 'var(--danger)' }}
                     onClick={() => handleDeleteSchedule(s.id)}>
                     <Trash2 size={12} />
                   </button>
@@ -673,16 +677,14 @@ function SleepPage() {
               </div>
             ))}
 
-            {/* Check for uncovered days */}
             {(() => {
               const covered = new Set(schedules.flatMap(s => s.days))
               const uncovered = [0,1,2,3,4,5,6].filter(d => !covered.has(d))
               if (uncovered.length === 0) return null
               return (
-                <div style={{
-                  padding: '8px 12px', borderRadius: 8, background: 'rgba(253,203,110,0.1)',
-                  fontSize: '0.72rem', color: 'var(--warning)', marginBottom: 10,
-                  display: 'flex', alignItems: 'center', gap: 6
+                <div className="flex items-center gap-6 rounded-sm mb-3" style={{
+                  padding: '8px 12px', background: 'rgba(253,203,110,0.1)',
+                  fontSize: '0.72rem', color: 'var(--warning)'
                 }}>
                   <AlertTriangle size={14} />
                   Sin horario: {uncovered.map(d => DAY_NAMES[d]).join(', ')}
@@ -694,51 +696,56 @@ function SleepPage() {
               const covered = new Set(schedules.flatMap(s => s.days))
               const free = [0,1,2,3,4,5,6].filter(d => !covered.has(d))
               setScheduleForm({ id: null, name: '', days: free.length > 0 ? free : [], bedtime: '23:00', wakeup: '07:00' })
+              setFormErrors({})
             }}>
               <Plus size={14} /> Nuevo horario
             </button>
 
-            <button className="btn btn-outline btn-block mt-2" onClick={() => setModal(null)}>Cerrar</button>
+            <button className="btn btn-outline btn-block mt-2" onClick={closeModal}>Cerrar</button>
           </div>
         </div>
       )}
 
-      {/* Schedule edit form */}
       {modal === 'schedules' && scheduleForm && (
-        <div className="modal-overlay" onClick={() => { setScheduleForm(null) }}>
+        <div className="modal-overlay" onClick={() => { setScheduleForm(null); setFormErrors({}) }}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <h2>{scheduleForm.id ? 'Editar horario' : 'Nuevo horario'}</h2>
             <div className="form-group">
               <label>Nombre</label>
-              <input value={scheduleForm.name} onChange={e => setScheduleForm({ ...scheduleForm, name: e.target.value })}
+              <input value={scheduleForm.name}
+                className={formErrors.name ? 'input-error' : ''}
+                onChange={e => {
+                  setScheduleForm({ ...scheduleForm, name: e.target.value })
+                  setFormErrors(prev => { const { name, ...rest } = prev; return rest })
+                }}
                 placeholder="Ej: Entre semana" autoFocus />
+              {formErrors.name && <div className="error-text">{formErrors.name}</div>}
             </div>
             <div className="form-group">
               <label>Dias</label>
-              <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <div className="flex gap-6 mt-1">
                 {DAY_LABELS.map((label, i) => {
                   const active = scheduleForm.days.includes(i)
-                  // Check if another schedule already has this day
                   const taken = schedules.some(s => s.id !== scheduleForm.id && s.days.includes(i))
                   return (
                     <div
                       key={i}
+                      className="flex items-center justify-center font-700 text-0\.75 transition-all"
                       onClick={() => {
                         if (taken) return
                         setScheduleForm({
                           ...scheduleForm,
                           days: active ? scheduleForm.days.filter(d => d !== i) : [...scheduleForm.days, i]
                         })
+                        setFormErrors(prev => { const { days, ...rest } = prev; return rest })
                       }}
                       style={{
                         width: 38, height: 38, borderRadius: 10,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: '0.75rem', fontWeight: 700, cursor: taken ? 'not-allowed' : 'pointer',
-                        background: active ? 'var(--primary)' : taken ? 'var(--bg-input)' : 'var(--bg-input)',
+                        cursor: taken ? 'not-allowed' : 'pointer',
+                        background: active ? 'var(--primary)' : 'var(--bg-input)',
                         color: active ? 'white' : taken ? 'var(--border)' : 'var(--text-muted)',
                         border: active ? '2px solid var(--primary)' : '2px solid var(--border)',
-                        opacity: taken ? 0.4 : 1,
-                        transition: 'all 0.15s'
+                        opacity: taken ? 0.4 : 1
                       }}
                     >
                       {label}
@@ -746,31 +753,39 @@ function SleepPage() {
                   )
                 })}
               </div>
+              {formErrors.days && <div className="error-text">{formErrors.days}</div>}
             </div>
             <div className="form-group">
               <label>Hora de dormir</label>
               <input type="time" value={scheduleForm.bedtime}
-                onChange={e => setScheduleForm({ ...scheduleForm, bedtime: e.target.value })} />
+                className={formErrors.bedtime ? 'input-error' : ''}
+                onChange={e => {
+                  setScheduleForm({ ...scheduleForm, bedtime: e.target.value })
+                  setFormErrors(prev => { const { bedtime, ...rest } = prev; return rest })
+                }} />
+              {formErrors.bedtime && <div className="error-text">{formErrors.bedtime}</div>}
             </div>
             <div className="form-group">
               <label>Hora de despertar</label>
               <input type="time" value={scheduleForm.wakeup}
-                onChange={e => setScheduleForm({ ...scheduleForm, wakeup: e.target.value })} />
+                className={formErrors.wakeup ? 'input-error' : ''}
+                onChange={e => {
+                  setScheduleForm({ ...scheduleForm, wakeup: e.target.value })
+                  setFormErrors(prev => { const { wakeup, ...rest } = prev; return rest })
+                }} />
+              {formErrors.wakeup && <div className="error-text">{formErrors.wakeup}</div>}
             </div>
             {scheduleForm.bedtime && scheduleForm.wakeup && (
-              <div style={{
-                padding: '10px 12px', borderRadius: 8, background: 'var(--bg-input)',
-                textAlign: 'center', marginBottom: 12
-              }}>
+              <div className="info-box">
                 <span className="text-xs text-muted">Horas objetivo: </span>
-                <span style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--primary-light)' }}>
+                <span className="font-800 text-lg text-primary-light">
                   {calcHours(scheduleForm.bedtime, scheduleForm.wakeup).toFixed(1)}h
                 </span>
               </div>
             )}
             <div className="flex gap-2">
-              <button className="btn btn-outline btn-block" onClick={() => setScheduleForm(null)}>Volver</button>
-              <button className="btn btn-primary btn-block" onClick={handleSaveSchedule}>Guardar</button>
+              <button className="btn btn-outline btn-block" onClick={() => { setScheduleForm(null); setFormErrors({}) }}>Volver</button>
+              <button className="btn btn-primary btn-block" disabled={isScheduleFormInvalid} onClick={handleSaveSchedule}>Guardar</button>
             </div>
           </div>
         </div>
