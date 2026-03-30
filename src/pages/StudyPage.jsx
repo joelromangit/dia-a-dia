@@ -317,8 +317,8 @@ function ManualExercise({ exercise, onPhotoUpload }) {
   )
 }
 
-function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPhotoUpload, onSubmitForReview }) {
-  const [expanded, setExpanded] = useState(false)
+function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPhotoUpload, onSubmitForReview, expandedBlockId }) {
+  const [expanded, setExpanded] = useState(expandedBlockId === block.id)
   const allExercises = block.exercises || []
   const allDone = allExercises.length > 0 && allExercises.every(ex => ex.status === 'done' || ex.status === 'submitted')
   const allSubmitted = allExercises.length > 0 && allExercises.every(ex => ex.status === 'submitted')
@@ -422,11 +422,16 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
 }
 
 const STUDY_STORAGE_KEY = 'grindset-study-data'
+const STUDY_DATA_VERSION = 2
 
 function loadStudyData() {
   try {
-    const saved = localStorage.getItem(STUDY_STORAGE_KEY)
-    if (saved) return JSON.parse(saved)
+    const savedVersion = localStorage.getItem(STUDY_STORAGE_KEY + '-version')
+    if (savedVersion === String(STUDY_DATA_VERSION)) {
+      const saved = localStorage.getItem(STUDY_STORAGE_KEY)
+      if (saved) return JSON.parse(saved)
+    }
+    localStorage.removeItem(STUDY_STORAGE_KEY)
   } catch {}
   return mockStudy.subjects
 }
@@ -434,6 +439,7 @@ function loadStudyData() {
 function saveStudyData(subjects) {
   try {
     localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(subjects))
+    localStorage.setItem(STUDY_STORAGE_KEY + '-version', String(STUDY_DATA_VERSION))
   } catch {}
 }
 
@@ -452,6 +458,7 @@ function StudyPage() {
   }, [])
   const [activeSubject, setActiveSubject] = useState(null)
   const [activeTopic, setActiveTopic] = useState(null)
+  const [expandedBlockId, setExpandedBlockId] = useState(null)
   const [modal, setModal] = useState(null)
   const [newSubject, setNewSubject] = useState({ name: '', color: '#4f8cff', icon: 'calculator' })
   const [newTask, setNewTask] = useState({ day: 'Lunes', task: '', topic: '' })
@@ -647,7 +654,7 @@ function StudyPage() {
     }
   }
 
-  const openTopic = (topic) => {
+  const openTopic = (topic, blockId = null) => {
     const state = getTopicStateFromLegacy(topic.status)
     if (!isAdmin && state === 'locked') return
     if (state === 'available') {
@@ -664,6 +671,7 @@ function StudyPage() {
       }))
       if (topic.id) studyDb.updateTopic(topic.id, { status: 'in_progress' })
     }
+    setExpandedBlockId(blockId)
     setActiveTopic(topic)
   }
 
@@ -843,6 +851,7 @@ function StudyPage() {
               onExerciseAnswer={handleExerciseAnswer}
               onPhotoUpload={handlePhotoUpload}
               onSubmitForReview={handleSubmitForReview}
+              expandedBlockId={expandedBlockId}
             />
           ))}
 
@@ -1105,7 +1114,7 @@ function StudyPage() {
                         onClick={() => {
                           if (task.topic) {
                             const topic = detail.topics.find(t => t.name === task.topic)
-                            if (topic) openTopic(topic)
+                            if (topic) openTopic(topic, task.blockId || null)
                           }
                         }}
                       >
