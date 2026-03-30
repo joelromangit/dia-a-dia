@@ -1,12 +1,16 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import {
   Plus, Check, Trash2, Settings, X, ChevronLeft, ChevronRight,
   Calculator, Leaf, FlaskConical, BookOpen, Globe, Atom,
-  CircleDot, CircleCheck, Circle
+  Lock, Unlock, CheckCircle, ChevronDown, ChevronUp,
+  Camera, Send, ArrowLeft, Image, Upload
 } from 'lucide-react'
 import { mockStudy } from '../data/mockData'
+import { sendWhatsAppNotification } from '../lib/notifications'
 import { useDb } from '../hooks/useDb'
 import { studyDb } from '../lib/db'
+import { useAdmin } from '../contexts/AdminContext'
+import { supabase, isSupabaseConfigured } from '../lib/supabase'
 
 const DAYS = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo']
 
@@ -30,10 +34,362 @@ const ICON_OPTIONS = [
 
 const COLOR_OPTIONS = ['#ff6b6b', '#51cf66', '#4f8cff', '#ffd43b', '#cc5de8', '#ff922b', '#20c997', '#748ffc']
 
+const TOPIC_STATES = ['locked', 'available', 'in_progress', 'completed']
+
+const TOPIC_STATE_CONFIG = {
+  locked: { icon: Lock, label: 'Bloqueado', color: 'var(--text-muted)' },
+  available: { icon: Unlock, label: 'Disponible', color: 'var(--primary-light)' },
+  in_progress: { icon: BookOpen, label: 'En curso', color: 'var(--warning)' },
+  completed: { icon: CheckCircle, label: 'Completado', color: 'var(--success)' },
+}
+
+function getTopicStateFromLegacy(status) {
+  if (status === 'current') return 'in_progress'
+  if (status === 'done') return 'completed'
+  if (status === 'pending') return 'locked'
+  if (TOPIC_STATES.includes(status)) return status
+  return 'locked'
+}
+
+function TopicStateBadge({ topic, subjectColor, isAdmin, onClick }) {
+  const state = getTopicStateFromLegacy(topic.status)
+  const config = TOPIC_STATE_CONFIG[state]
+  const StateIcon = config.icon
+
+  return (
+    <span
+      onClick={isAdmin ? (e) => { e.stopPropagation(); onClick() } : undefined}
+      className={`flex items-center gap-1 font-700 text-uppercase${isAdmin ? ' cursor-pointer' : ''}`}
+      style={{
+        padding: '3px 8px',
+        borderRadius: 10,
+        fontSize: '0.6rem',
+        background: state === 'in_progress'
+          ? `${subjectColor}20`
+          : state === 'completed'
+            ? 'rgba(0,206,201,0.15)'
+            : state === 'available'
+              ? 'rgba(108,92,231,0.12)'
+              : 'rgba(136,136,160,0.12)',
+        color: state === 'in_progress' ? subjectColor : config.color,
+      }}
+    >
+      <StateIcon size={10} />
+      {config.label}
+    </span>
+  )
+}
+
+function AutoExerciseMultipleChoice({ exercise, onAnswer }) {
+  const [selected, setSelected] = useState(null)
+  const [submitted, setSubmitted] = useState(false)
+  const { choices, correctIndex } = exercise.autoConfig
+  const isDone = exercise.status === 'done' || exercise.status === 'submitted'
+
+  const handleSubmit = () => {
+    if (selected === null) return
+    setSubmitted(true)
+    if (selected === correctIndex) {
+      onAnswer(exercise.id, selected, true)
+    }
+  }
+
+  const handleRetry = () => {
+    setSelected(null)
+    setSubmitted(false)
+  }
+
+  if (isDone) {
+    return (
+      <div style={{ padding: '10px 0' }}>
+        <div className="text-0\.85 mb-2">{exercise.question}</div>
+        <div className="flex items-center gap-2">
+          <CheckCircle size={16} style={{ color: 'var(--success)' }} />
+          <span className="text-xs text-success font-600">Correcto: {choices[correctIndex]}</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: '10px 0' }}>
+      <div className="text-0\.85 mb-2">{exercise.question}</div>
+      <div className="flex-col" style={{ gap: 6 }}>
+        {choices.map((choice, i) => {
+          let bg = 'var(--bg-input)'
+          let border = '1px solid var(--border)'
+          let textColor = 'var(--text)'
+          if (submitted && i === correctIndex) {
+            bg = 'rgba(0,206,201,0.15)'
+            border = '1px solid var(--success)'
+            textColor = 'var(--success)'
+          } else if (submitted && i === selected && i !== correctIndex) {
+            bg = 'rgba(255,118,117,0.15)'
+            border = '1px solid var(--danger)'
+            textColor = 'var(--danger)'
+          } else if (!submitted && i === selected) {
+            bg = 'rgba(108,92,231,0.15)'
+            border = '1px solid var(--primary)'
+          }
+          return (
+            <div
+              key={i}
+              onClick={!submitted ? () => setSelected(i) : undefined}
+              className={`flex items-center gap-10 rounded-sm${!submitted ? ' cursor-pointer' : ''}`}
+              style={{ padding: '10px 12px', background: bg, border, color: textColor, fontSize: '0.85rem' }}
+            >
+              <div
+                className="flex-shrink-0 rounded-full flex items-center justify-center"
+                style={{
+                  width: 18, height: 18,
+                  border: i === selected ? '2px solid currentColor' : '2px solid var(--border)',
+                  background: i === selected ? 'currentColor' : 'transparent',
+                }}
+              >
+                {i === selected && <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'white' }} />}
+              </div>
+              {choice}
+            </div>
+          )
+        })}
+      </div>
+      {!submitted && (
+        <button
+          className="btn btn-primary btn-sm mt-2"
+          disabled={selected === null}
+          onClick={handleSubmit}
+        >
+          Comprobar
+        </button>
+      )}
+      {submitted && selected !== correctIndex && (
+        <button className="btn btn-outline btn-sm mt-2" onClick={handleRetry}>
+          Reintentar
+        </button>
+      )}
+    </div>
+  )
+}
+
+function AutoExerciseFillBlank({ exercise, onAnswer }) {
+  const [answer, setAnswer] = useState('')
+  const [submitted, setSubmitted] = useState(false)
+  const isDone = exercise.status === 'done' || exercise.status === 'submitted'
+  const expected = exercise.autoConfig.expectedAnswer
+
+  const isCorrect = submitted && answer.trim().toLowerCase() === expected.trim().toLowerCase()
+
+  const handleSubmit = () => {
+    if (!answer.trim()) return
+    setSubmitted(true)
+    if (answer.trim().toLowerCase() === expected.trim().toLowerCase()) {
+      onAnswer(exercise.id, answer.trim(), true)
+    }
+  }
+
+  const handleRetry = () => {
+    setAnswer('')
+    setSubmitted(false)
+  }
+
+  if (isDone) {
+    return (
+      <div style={{ padding: '10px 0' }}>
+        <div className="text-0\.85 mb-2">{exercise.question}</div>
+        <div className="flex items-center gap-2">
+          <CheckCircle size={16} style={{ color: 'var(--success)' }} />
+          <span className="text-xs text-success font-600">Correcto: {expected}</span>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: '10px 0' }}>
+      <div className="text-0\.85 mb-2">{exercise.question}</div>
+      <div className="flex gap-2">
+        <input
+          value={answer}
+          onChange={e => setAnswer(e.target.value)}
+          placeholder="Tu respuesta"
+          onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+          style={submitted && !isCorrect ? { borderColor: 'var(--danger)' } : {}}
+        />
+        {!submitted && (
+          <button className="btn btn-primary btn-sm" disabled={!answer.trim()} onClick={handleSubmit}>
+            Comprobar
+          </button>
+        )}
+      </div>
+      {submitted && !isCorrect && (
+        <div className="mt-2">
+          <span className="text-xs text-danger font-600">Respuesta correcta: {expected}</span>
+          <button className="btn btn-outline btn-sm mt-1" onClick={handleRetry}>Reintentar</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ManualExercise({ exercise, onPhotoUpload }) {
+  const fileRef = useRef(null)
+  const isDone = exercise.status === 'done' || exercise.status === 'submitted'
+
+  return (
+    <div style={{ padding: '10px 0' }}>
+      <div className="text-0\.85 mb-2">{exercise.question}</div>
+      {exercise.photoUrl && (
+        <div style={{ marginBottom: 8 }}>
+          <img
+            src={exercise.photoUrl}
+            alt="Respuesta"
+            style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, border: '1px solid var(--border)' }}
+          />
+        </div>
+      )}
+      {exercise.status === 'submitted' && (
+        <div className="flex items-center gap-2">
+          <Send size={14} style={{ color: 'var(--primary-light)' }} />
+          <span className="text-xs text-primary-light font-600">Enviado para correccion</span>
+        </div>
+      )}
+      {!exercise.photoUrl && exercise.status !== 'submitted' && (
+        <>
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            style={{ display: 'none' }}
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (file) onPhotoUpload(exercise.id, file)
+            }}
+          />
+          <button className="btn btn-outline btn-sm" onClick={() => fileRef.current?.click()}>
+            <Camera size={14} /> Subir foto
+          </button>
+        </>
+      )}
+      {exercise.photoUrl && !isDone && exercise.status !== 'submitted' && (
+        <div className="flex items-center gap-2 mt-1">
+          <CheckCircle size={14} style={{ color: 'var(--success)' }} />
+          <span className="text-xs text-success font-600">Foto subida</span>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPhotoUpload, onSubmitForReview }) {
+  const [expanded, setExpanded] = useState(false)
+  const allExercises = block.exercises || []
+  const allDone = allExercises.length > 0 && allExercises.every(ex => ex.status === 'done' || ex.status === 'submitted')
+  const allSubmitted = allExercises.length > 0 && allExercises.every(ex => ex.status === 'submitted')
+  const [showSuccess, setShowSuccess] = useState(false)
+
+  const handleSubmit = () => {
+    onSubmitForReview(block.id)
+    setShowSuccess(true)
+    setTimeout(() => setShowSuccess(false), 3000)
+  }
+
+  return (
+    <div
+      style={{
+        margin: '0 16px 10px',
+        borderRadius: 'var(--radius)',
+        border: `1px solid var(--border)`,
+        background: 'var(--bg-card)',
+        overflow: 'hidden',
+      }}
+    >
+      <div
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-10 cursor-pointer"
+        style={{ padding: '14px 16px' }}
+      >
+        <div className="flex-1 min-w-0">
+          <div className="font-600" style={{ fontSize: '0.88rem' }}>{block.title}</div>
+          <div className="text-xs text-muted mt-1">
+            {allExercises.length} ejercicios
+            {allDone && !allSubmitted && ' - Listos para enviar'}
+            {allSubmitted && ' - Enviados'}
+          </div>
+        </div>
+        {expanded ? <ChevronUp size={18} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={18} style={{ color: 'var(--text-muted)' }} />}
+      </div>
+
+      {expanded && (
+        <div style={{ padding: '0 16px 16px' }}>
+          <div style={{
+            fontSize: '0.85rem',
+            lineHeight: 1.65,
+            color: 'var(--text)',
+            whiteSpace: 'pre-line',
+            marginBottom: allExercises.length > 0 ? 16 : 0,
+          }}>
+            {block.content}
+          </div>
+
+          {allExercises.length > 0 && (
+            <>
+              <div className="font-700 text-uppercase tracking-wide text-muted" style={{ fontSize: '0.68rem', marginBottom: 8 }}>
+                Ejercicios
+              </div>
+              {allExercises.map((ex, i) => (
+                <div key={ex.id} style={{ borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+                  <div className="flex items-center gap-2" style={{ paddingTop: i > 0 ? 8 : 0 }}>
+                    <span className="text-xs text-muted font-600">{i + 1}.</span>
+                    {ex.status === 'done' && <span className="badge badge-success" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Hecho</span>}
+                    {ex.status === 'submitted' && <span className="badge badge-primary" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Enviado</span>}
+                    {ex.status === 'pending' && <span className="badge" style={{ fontSize: '0.6rem', padding: '1px 6px', background: 'rgba(136,136,160,0.12)', color: 'var(--text-muted)' }}>Pendiente</span>}
+                  </div>
+                  {ex.type === 'auto' && ex.autoConfig?.type === 'multiple_choice' && (
+                    <AutoExerciseMultipleChoice exercise={ex} onAnswer={onExerciseAnswer} />
+                  )}
+                  {ex.type === 'auto' && ex.autoConfig?.type === 'fill_blank' && (
+                    <AutoExerciseFillBlank exercise={ex} onAnswer={onExerciseAnswer} />
+                  )}
+                  {ex.type === 'manual' && (
+                    <ManualExercise exercise={ex} onPhotoUpload={onPhotoUpload} />
+                  )}
+                </div>
+              ))}
+
+              {allDone && !allSubmitted && (
+                <button
+                  className="btn btn-sm w-full mt-3"
+                  style={{ background: `${subjectColor}20`, color: subjectColor, border: 'none', justifyContent: 'center' }}
+                  onClick={handleSubmit}
+                >
+                  <Send size={14} /> Enviar para corregir
+                </button>
+              )}
+              {showSuccess && (
+                <div className="text-xs text-success font-600 text-center mt-2">
+                  Ejercicios enviados para correccion
+                </div>
+              )}
+              {allSubmitted && (
+                <div className="text-xs text-primary-light font-600 text-center mt-2">
+                  Todos los ejercicios enviados
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function StudyPage() {
+  const { isAdmin } = useAdmin()
   const fetchSubjects = useCallback(() => studyDb.getSubjects(), [])
   const [subjects, setSubjects, { loading, error }] = useDb(fetchSubjects, mockStudy.subjects)
   const [activeSubject, setActiveSubject] = useState(null)
+  const [activeTopic, setActiveTopic] = useState(null)
   const [modal, setModal] = useState(null)
   const [newSubject, setNewSubject] = useState({ name: '', color: '#4f8cff', icon: 'calculator' })
   const [newTask, setNewTask] = useState({ day: 'Lunes', task: '', topic: '' })
@@ -43,6 +399,9 @@ function StudyPage() {
   const [errors, setErrors] = useState({})
 
   const detail = activeSubject ? subjects.find(s => s.id === activeSubject) : null
+  const currentTopicData = activeTopic && detail
+    ? detail.topics.find(t => t.name === activeTopic.name && t.order === activeTopic.order)
+    : null
 
   const clearErrors = () => setErrors({})
 
@@ -51,28 +410,26 @@ function StudyPage() {
     clearErrors()
   }
 
-  // Helpers
   const getSubjectProgress = (s) => {
     const total = s.weeklyPlan.length
     const done = s.weeklyPlan.filter(t => t.done).length
     return total > 0 ? Math.round((done / total) * 100) : 0
   }
 
-  const getCurrentTopic = (s) => s.topics.find(t => t.status === 'current')
+  const getCurrentTopic = (s) => s.topics.find(t => {
+    const state = getTopicStateFromLegacy(t.status)
+    return state === 'in_progress'
+  })
   const getNextTopic = (s) => {
-    const currentIdx = s.topics.findIndex(t => t.status === 'current')
-    return currentIdx >= 0 && currentIdx < s.topics.length - 1
-      ? s.topics[currentIdx + 1]
-      : null
+    const currentIdx = s.topics.findIndex(t => getTopicStateFromLegacy(t.status) === 'in_progress')
+    return currentIdx >= 0 && currentIdx < s.topics.length - 1 ? s.topics[currentIdx + 1] : null
   }
-  const getDoneTopics = (s) => s.topics.filter(t => t.status === 'done').length
+  const getCompletedTopics = (s) => s.topics.filter(t => getTopicStateFromLegacy(t.status) === 'completed').length
 
-  // Global KPIs
   const totalTasks = subjects.reduce((a, s) => a + s.weeklyPlan.length, 0)
   const doneTasks = subjects.reduce((a, s) => a + s.weeklyPlan.filter(t => t.done).length, 0)
   const weekProgress = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0
 
-  // Today's tasks
   const dayIndex = new Date().getDay()
   const todayName = ['Domingo', 'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado'][dayIndex]
   const todayTasks = subjects.flatMap(s =>
@@ -81,7 +438,6 @@ function StudyPage() {
       .filter(t => t.day === todayName)
   )
 
-  // Validation
   const validateAddSubject = () => {
     const errs = {}
     if (!newSubject.name.trim()) errs.name = 'El nombre es obligatorio'
@@ -114,7 +470,6 @@ function StudyPage() {
     return Object.keys(errs).length === 0
   }
 
-  // Actions
   const toggleTask = (subjectId, taskIndex) => {
     const subject = subjects.find(s => s.id === subjectId)
     const task = subject?.weeklyPlan[taskIndex]
@@ -169,14 +524,16 @@ function StudyPage() {
     const name = newTopic.trim()
     const subject = subjects.find(s => s.id === subjectId)
     const order = subject ? subject.topics.length + 1 : 1
+    const hasAny = subject && subject.topics.length > 0
+    const initialStatus = hasAny ? 'locked' : 'available'
     setSubjects(subjects.map(s =>
       s.id === subjectId
-        ? { ...s, topics: [...s.topics, { name, order, status: 'pending' }] }
+        ? { ...s, topics: [...s.topics, { name, order, status: initialStatus, theoryBlocks: [] }] }
         : s
     ))
     setNewTopic('')
     clearErrors()
-    studyDb.addTopic(subjectId, name, order, 'pending')
+    studyDb.addTopic(subjectId, name, order, initialStatus)
   }
 
   const handleDeleteTopic = (subjectId, topicIndex) => {
@@ -188,31 +545,148 @@ function StudyPage() {
     if (topicId) studyDb.deleteTopic(topicId)
   }
 
-  const cycleTopic = (subjectId, topicIndex) => {
-    const cycle = { pending: 'current', current: 'done', done: 'pending' }
-    const subject = subjects.find(s => s.id === subjectId)
-    const topic = subject?.topics[topicIndex]
-    const newStatus = topic ? cycle[topic.status] : null
+  const cycleTopicState = (subjectId, topicIndex) => {
+    if (!isAdmin) return
+    const cycle = { locked: 'available', available: 'in_progress', in_progress: 'completed', completed: 'locked' }
     setSubjects(subjects.map(s => {
       if (s.id !== subjectId) return s
       const topics = s.topics.map((t, i) => {
-        if (i === topicIndex) return { ...t, status: cycle[t.status] }
-        if (cycle[s.topics[topicIndex].status] === 'current' && t.status === 'current')
-          return { ...t, status: 'pending' }
-        return t
+        if (i !== topicIndex) return t
+        const currentState = getTopicStateFromLegacy(t.status)
+        const newState = cycle[currentState]
+        return { ...t, status: newState }
       })
+      const changedTopic = topics[topicIndex]
+      if (changedTopic.status === 'completed') {
+        const nextIdx = topicIndex + 1
+        if (nextIdx < topics.length && getTopicStateFromLegacy(topics[nextIdx].status) === 'locked') {
+          topics[nextIdx] = { ...topics[nextIdx], status: 'available' }
+        }
+      }
       return { ...s, topics }
     }))
-    if (topic?.id && newStatus) {
-      studyDb.updateTopic(topic.id, { status: newStatus })
-      if (newStatus === 'current' && subject) {
-        subject.topics.forEach((t, i) => {
-          if (i !== topicIndex && t.status === 'current' && t.id) {
-            studyDb.updateTopic(t.id, { status: 'pending' })
-          }
-        })
+    const subject = subjects.find(s => s.id === subjectId)
+    const topic = subject?.topics[topicIndex]
+    if (topic?.id) {
+      const currentState = getTopicStateFromLegacy(topic.status)
+      const newState = { locked: 'available', available: 'in_progress', in_progress: 'completed', completed: 'locked' }[currentState]
+      studyDb.updateTopic(topic.id, { status: newState })
+      if (newState === 'completed' && subject) {
+        const nextTopic = subject.topics[topicIndex + 1]
+        if (nextTopic?.id && getTopicStateFromLegacy(nextTopic.status) === 'locked') {
+          studyDb.updateTopic(nextTopic.id, { status: 'available' })
+        }
       }
     }
+  }
+
+  const openTopic = (topic) => {
+    const state = getTopicStateFromLegacy(topic.status)
+    if (!isAdmin && state === 'locked') return
+    if (state === 'available') {
+      setSubjects(subjects.map(s => {
+        if (s.id !== activeSubject) return s
+        return {
+          ...s,
+          topics: s.topics.map(t =>
+            t.name === topic.name && t.order === topic.order
+              ? { ...t, status: 'in_progress' }
+              : t
+          )
+        }
+      }))
+      if (topic.id) studyDb.updateTopic(topic.id, { status: 'in_progress' })
+    }
+    setActiveTopic(topic)
+  }
+
+  const handleExerciseAnswer = (exerciseId, answer, correct) => {
+    if (!correct) return
+    setSubjects(subjects.map(s => {
+      if (s.id !== activeSubject) return s
+      return {
+        ...s,
+        topics: s.topics.map(t => ({
+          ...t,
+          theoryBlocks: (t.theoryBlocks || []).map(b => ({
+            ...b,
+            exercises: (b.exercises || []).map(ex =>
+              ex.id === exerciseId ? { ...ex, status: 'done', studentAnswer: answer } : ex
+            )
+          }))
+        }))
+      }
+    }))
+  }
+
+  const handlePhotoUpload = async (exerciseId, file) => {
+    let photoUrl = null
+    if (isSupabaseConfigured() && supabase) {
+      const ext = file.name.split('.').pop()
+      const path = `exercises/${Date.now()}.${ext}`
+      const { error: uploadError } = await supabase.storage.from('uploads').upload(path, file)
+      if (!uploadError) {
+        const { data } = supabase.storage.from('uploads').getPublicUrl(path)
+        photoUrl = data.publicUrl
+      }
+    }
+    if (!photoUrl) {
+      photoUrl = URL.createObjectURL(file)
+    }
+    setSubjects(subjects.map(s => {
+      if (s.id !== activeSubject) return s
+      return {
+        ...s,
+        topics: s.topics.map(t => ({
+          ...t,
+          theoryBlocks: (t.theoryBlocks || []).map(b => ({
+            ...b,
+            exercises: (b.exercises || []).map(ex =>
+              ex.id === exerciseId ? { ...ex, status: 'done', photoUrl } : ex
+            )
+          }))
+        }))
+      }
+    }))
+  }
+
+  const handleSubmitForReview = (blockId) => {
+    const subject = subjects.find(s => s.id === activeSubject)
+    let topicName = ''
+    let blockTitle = ''
+    let exerciseCount = 0
+    if (subject) {
+      for (const t of subject.topics || []) {
+        const block = (t.theoryBlocks || []).find(b => b.id === blockId)
+        if (block) {
+          topicName = t.name || t.title || ''
+          blockTitle = block.title || ''
+          exerciseCount = (block.exercises || []).filter(ex => ex.status === 'done').length
+          break
+        }
+      }
+    }
+
+    setSubjects(subjects.map(s => {
+      if (s.id !== activeSubject) return s
+      return {
+        ...s,
+        topics: s.topics.map(t => ({
+          ...t,
+          theoryBlocks: (t.theoryBlocks || []).map(b => {
+            if (b.id !== blockId) return b
+            return {
+              ...b,
+              exercises: (b.exercises || []).map(ex =>
+                ex.status === 'done' ? { ...ex, status: 'submitted' } : ex
+              )
+            }
+          })
+        }))
+      }
+    }))
+
+    sendWhatsAppNotification(`Nuevos ejercicios para corregir: ${topicName} - ${blockTitle} (${exerciseCount} ejercicios)`)
   }
 
   const handleAddTask = (subjectId) => {
@@ -246,6 +720,69 @@ function StudyPage() {
     )
   }
 
+  // ========== TOPIC VIEW ==========
+  if (detail && currentTopicData) {
+    const Icon = ICONS[detail.icon] || Calculator
+    const topicState = getTopicStateFromLegacy(currentTopicData.status)
+    const theoryBlocks = currentTopicData.theoryBlocks || []
+
+    return (
+      <>
+        {error && showError && (
+          <div className="error-banner">
+            <span>No se pudo conectar con el servidor. Usando datos locales.</span>
+            <button className="dismiss" onClick={() => setShowError(false)}>x</button>
+          </div>
+        )}
+
+        <div className="p-16 sticky-top" style={{
+          background: `linear-gradient(135deg, ${detail.color}18 0%, transparent 100%)`,
+          backdropFilter: 'blur(10px)'
+        }}>
+          <div className="flex items-center gap-2 mb-3">
+            <button className="btn-ghost" onClick={() => setActiveTopic(null)}>
+              <ArrowLeft size={20} />
+            </button>
+            <Icon size={18} style={{ color: detail.color }} />
+            <div className="flex-1 min-w-0">
+              <div className="font-700 text-lg">{currentTopicData.name}</div>
+              <div className="text-xs text-muted">{detail.name}</div>
+            </div>
+            <TopicStateBadge
+              topic={currentTopicData}
+              subjectColor={detail.color}
+              isAdmin={isAdmin}
+              onClick={() => {
+                const idx = detail.topics.findIndex(t => t.name === currentTopicData.name && t.order === currentTopicData.order)
+                if (idx >= 0) cycleTopicState(detail.id, idx)
+              }}
+            />
+          </div>
+        </div>
+
+        {theoryBlocks.length === 0 && (
+          <div className="text-muted text-center" style={{ padding: '40px 16px', fontSize: '0.85rem' }}>
+            Sin contenido teorico todavia.
+          </div>
+        )}
+
+        {theoryBlocks.map(block => (
+          <TheoryBlockCard
+            key={block.id}
+            block={block}
+            subjectColor={detail.color}
+            isAdmin={isAdmin}
+            onExerciseAnswer={handleExerciseAnswer}
+            onPhotoUpload={handlePhotoUpload}
+            onSubmitForReview={handleSubmitForReview}
+          />
+        ))}
+
+        <div style={{ height: 24 }} />
+      </>
+    )
+  }
+
   // ========== DETAIL VIEW ==========
   if (detail) {
     const Icon = ICONS[detail.icon] || Calculator
@@ -265,11 +802,10 @@ function StudyPage() {
         {error && showError && (
           <div className="error-banner">
             <span>No se pudo conectar con el servidor. Usando datos locales.</span>
-            <button className="dismiss" onClick={() => setShowError(false)}>×</button>
+            <button className="dismiss" onClick={() => setShowError(false)}>x</button>
           </div>
         )}
 
-        {/* Header */}
         <div className="p-16 sticky-top" style={{
           background: `linear-gradient(135deg, ${detail.color}18 0%, transparent 100%)`,
           backdropFilter: 'blur(10px)'
@@ -280,20 +816,21 @@ function StudyPage() {
             </button>
             <Icon size={20} style={{ color: detail.color }} />
             <span className="font-700 text-lg flex-1">{detail.name}</span>
-            <button
-              className="btn btn-sm border-none"
-              style={{ background: `${detail.color}20`, color: detail.color }}
-              onClick={() => {
-                setEditForm({ name: detail.name, color: detail.color, icon: detail.icon })
-                clearErrors()
-                setModal('edit-subject')
-              }}
-            >
-              <Settings size={14} />
-            </button>
+            {isAdmin && (
+              <button
+                className="btn btn-sm border-none"
+                style={{ background: `${detail.color}20`, color: detail.color }}
+                onClick={() => {
+                  setEditForm({ name: detail.name, color: detail.color, icon: detail.icon })
+                  clearErrors()
+                  setModal('edit-subject')
+                }}
+              >
+                <Settings size={14} />
+              </button>
+            )}
           </div>
 
-          {/* Progress + current topic */}
           <div className="flex gap-10">
             <div className="flex-1 bg-card rounded-sm border" style={{ padding: '10px 12px' }}>
               <div className="text-xs text-muted">Semana</div>
@@ -306,65 +843,76 @@ function StudyPage() {
                 {currentTopic ? currentTopic.name : 'Ninguno'}
               </div>
               <div className="text-xs text-muted">
-                {getDoneTopics(detail)}/{detail.topics.length} completados
+                {getCompletedTopics(detail)}/{detail.topics.length} completados
               </div>
             </div>
           </div>
         </div>
 
-        {/* Topic roadmap */}
         <div className="section-header">
           <span className="section-title">Temario</span>
         </div>
         <div className="px-16" style={{ paddingBottom: 8 }}>
           {detail.topics.map((topic, i) => {
-            const StatusIcon = topic.status === 'done' ? CircleCheck : topic.status === 'current' ? CircleDot : Circle
-            const color = topic.status === 'done' ? 'var(--success)' : topic.status === 'current' ? detail.color : 'var(--text-muted)'
+            const state = getTopicStateFromLegacy(topic.status)
+            const config = TOPIC_STATE_CONFIG[state]
+            const StateIcon = config.icon
+            const isClickable = isAdmin || (state !== 'locked')
+            const hasContent = (topic.theoryBlocks || []).length > 0
+
             return (
               <div
                 key={i}
-                onClick={() => cycleTopic(detail.id, i)}
-                className="flex items-center gap-10 cursor-pointer"
+                onClick={() => {
+                  if (isClickable && hasContent) openTopic(topic)
+                }}
+                className={`flex items-center gap-10${isClickable && hasContent ? ' cursor-pointer' : ''}`}
                 style={{
                   padding: '9px 0',
                   borderBottom: i < detail.topics.length - 1 ? '1px solid var(--border)' : 'none',
+                  opacity: state === 'locked' && !isAdmin ? 0.5 : 1,
                 }}
               >
-                <StatusIcon size={18} className="flex-shrink-0" style={{ color }} />
+                <StateIcon
+                  size={18}
+                  className="flex-shrink-0"
+                  style={{
+                    color: state === 'completed' ? 'var(--success)'
+                      : state === 'in_progress' ? detail.color
+                      : state === 'available' ? 'var(--primary-light)'
+                      : 'var(--text-muted)'
+                  }}
+                />
                 <span className="flex-1" style={{
                   fontSize: '0.85rem',
-                  fontWeight: topic.status === 'current' ? 700 : 400,
-                  color: topic.status === 'done' ? 'var(--text-muted)' : 'var(--text)',
-                  textDecoration: topic.status === 'done' ? 'line-through' : 'none',
+                  fontWeight: state === 'in_progress' ? 700 : 400,
+                  color: state === 'completed' ? 'var(--text-muted)' : 'var(--text)',
+                  textDecoration: state === 'completed' ? 'line-through' : 'none',
                 }}>
                   {topic.name}
                 </span>
-                {topic.status === 'current' && (
-                  <span className="font-700 text-uppercase" style={{
-                    padding: '2px 8px',
-                    borderRadius: 10,
-                    fontSize: '0.6rem',
-                    background: `${detail.color}20`,
-                    color: detail.color,
-                  }}>
-                    Ahora
-                  </span>
-                )}
+                <TopicStateBadge
+                  topic={topic}
+                  subjectColor={detail.color}
+                  isAdmin={isAdmin}
+                  onClick={() => cycleTopicState(detail.id, i)}
+                />
               </div>
             )
           })}
         </div>
 
-        {/* Tasks */}
         <div className="section-header">
           <span className="section-title">Tareas de la semana</span>
-          <button
-            className="btn btn-sm border-none"
-            style={{ background: `${detail.color}20`, color: detail.color }}
-            onClick={() => { setNewTask({ day: 'Lunes', task: '', topic: '' }); clearErrors(); setModal('add-task') }}
-          >
-            <Plus size={14} /> Tarea
-          </button>
+          {isAdmin && (
+            <button
+              className="btn btn-sm border-none"
+              style={{ background: `${detail.color}20`, color: detail.color }}
+              onClick={() => { setNewTask({ day: 'Lunes', task: '', topic: '' }); clearErrors(); setModal('add-task') }}
+            >
+              <Plus size={14} /> Tarea
+            </button>
+          )}
         </div>
 
         {DAYS.filter(d => tasksByDay[d]).map(day => (
@@ -409,12 +957,14 @@ function StudyPage() {
                     </span>
                   )}
                 </div>
-                <button
-                  className="btn-ghost muted opacity-40"
-                  onClick={() => handleDeleteTask(detail.id, task.originalIndex)}
-                >
-                  <Trash2 size={13} />
-                </button>
+                {isAdmin && (
+                  <button
+                    className="btn-ghost muted opacity-40"
+                    onClick={() => handleDeleteTask(detail.id, task.originalIndex)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -428,7 +978,6 @@ function StudyPage() {
 
         <div style={{ height: 24 }} />
 
-        {/* Add task modal */}
         {modal === 'add-task' && (
           <div className="modal-overlay" onClick={closeModal}>
             <div className="modal" onClick={e => e.stopPropagation()}>
@@ -474,7 +1023,6 @@ function StudyPage() {
           </div>
         )}
 
-        {/* Edit subject modal */}
         {modal === 'edit-subject' && editForm && (
           <div className="modal-overlay" onClick={closeModal}>
             <div className="modal" onClick={e => e.stopPropagation()}>
@@ -584,7 +1132,7 @@ function StudyPage() {
             <h1>Estudio</h1>
             <p>Selectividad - Planning semanal</p>
           </div>
-          {subjects.length < 4 && (
+          {isAdmin && subjects.length < 4 && (
             <button className="btn btn-primary btn-sm" onClick={() => { clearErrors(); setModal('add-subject') }}>
               <Plus size={14} />
             </button>
@@ -595,11 +1143,10 @@ function StudyPage() {
       {error && showError && (
         <div className="error-banner">
           <span>No se pudo conectar con el servidor. Usando datos locales.</span>
-          <button className="dismiss" onClick={() => setShowError(false)}>×</button>
+          <button className="dismiss" onClick={() => setShowError(false)}>x</button>
         </div>
       )}
 
-      {/* Global weekly progress */}
       <div className="card" style={{ borderLeft: `3px solid ${weekProgress >= 70 ? 'var(--success)' : weekProgress >= 40 ? 'var(--warning)' : 'var(--primary)'}` }}>
         <div className="flex justify-between items-center">
           <div>
@@ -621,13 +1168,12 @@ function StudyPage() {
         </div>
       </div>
 
-      {/* Subject cards */}
       {subjects.map(subject => {
         const Icon = ICONS[subject.icon] || Calculator
         const progress = getSubjectProgress(subject)
         const current = getCurrentTopic(subject)
         const next = getNextTopic(subject)
-        const doneTops = getDoneTopics(subject)
+        const doneTops = getCompletedTopics(subject)
         const subDone = subject.weeklyPlan.filter(t => t.done).length
         const subTotal = subject.weeklyPlan.length
 
@@ -643,7 +1189,6 @@ function StudyPage() {
               background: `linear-gradient(135deg, ${subject.color}0a 0%, ${subject.color}03 100%)`,
             }}
           >
-            {/* Top section: icon + name + progress */}
             <div className="flex items-center gap-14" style={{ padding: '16px 16px 12px' }}>
               <div className="flex items-center justify-center flex-shrink-0" style={{
                 width: 48, height: 48, borderRadius: 14,
@@ -664,7 +1209,6 @@ function StudyPage() {
               </div>
             </div>
 
-            {/* Progress bar */}
             <div className="px-16">
               <div className="progress-bar" style={{ height: 4, margin: 0 }}>
                 <div style={{
@@ -674,7 +1218,6 @@ function StudyPage() {
               </div>
             </div>
 
-            {/* Current + Next topic */}
             <div className="flex gap-8" style={{ padding: '12px 16px' }}>
               {current && (
                 <div className="flex-1" style={{
@@ -705,7 +1248,6 @@ function StudyPage() {
               )}
             </div>
 
-            {/* Tap hint */}
             <div className="flex items-center justify-end gap-1" style={{ padding: '0 16px 10px' }}>
               <span className="text-xs text-muted">Ver detalle</span>
               <ChevronRight size={14} style={{ color: 'var(--text-muted)' }} />
@@ -714,7 +1256,6 @@ function StudyPage() {
         )
       })}
 
-      {/* Today's tasks quick view */}
       {todayTasks.length > 0 && (
         <>
           <div className="section-header">
@@ -763,7 +1304,6 @@ function StudyPage() {
         </div>
       )}
 
-      {/* Add subject modal */}
       {modal === 'add-subject' && (
         <div className="modal-overlay" onClick={closeModal}>
           <div className="modal" onClick={e => e.stopPropagation()}>
