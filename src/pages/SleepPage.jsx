@@ -381,72 +381,73 @@ function SleepPage() {
       <div className="section-header">
         <span className="section-title">Esta semana</span>
         <button className="btn btn-outline btn-sm" onClick={() => setModal('calendar')}>
-          <Calendar size={13} /> Ver calendario
+          <Calendar size={13} /> Calendario
         </button>
       </div>
 
-      <div className="px-16" style={{ paddingBottom: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {weekDays.map((dateStr, i) => {
-          const rec = recordMap[dateStr]
-          const isToday = dateStr === todayStr
-          const isFuture = dateStr > todayStr
-          const goalH = getGoalHoursForDate(dateStr)
-          const hours = rec ? calcHours(rec.bedtime, rec.wakeup) : 0
-          const status = rec ? getCellStatus(dateStr) : 'empty'
-          const statusColor = status === 'good' ? 'var(--success)' : status === 'warn' ? 'var(--warning)' : status === 'bad' ? 'var(--danger)' : 'var(--border)'
-          const isSelected = dateStr === selectedDate
+      <div className="px-16" style={{ paddingBottom: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6 }}>
+          {weekDays.map((dateStr, i) => {
+            const rec = recordMap[dateStr]
+            const isToday = dateStr === todayStr
+            const isFuture = dateStr > todayStr
+            const goalH = getGoalHoursForDate(dateStr)
+            const hours = rec ? calcHours(rec.bedtime, rec.wakeup) : 0
+            const status = rec ? getCellStatus(dateStr) : 'empty'
+            const isSelected = dateStr === selectedDate
 
-          return (
-            <div
-              key={i}
-              className="flex items-center cursor-pointer transition-all"
-              onClick={() => setSelectedDate(dateStr === selectedDate ? null : dateStr)}
-              style={{
-                gap: 10, padding: '8px 12px', borderRadius: 10,
-                background: isSelected ? 'rgba(99,110,251,0.08)' : 'var(--bg-card)',
-                border: isToday ? '1.5px solid var(--primary)' : '1.5px solid transparent',
-                opacity: isFuture ? 0.35 : 1
-              }}
-            >
-              <div style={{ width: 28, textAlign: 'center' }}>
-                <div style={{
-                  fontSize: '0.65rem', fontWeight: 700,
-                  color: isToday ? 'var(--primary-light)' : 'var(--text-muted)'
-                }}>{DAY_LABELS[i]}</div>
-                <div style={{
-                  fontSize: '0.85rem', fontWeight: isToday ? 800 : 600,
-                  color: isToday ? 'var(--text)' : 'var(--text-muted)'
-                }}>{new Date(dateStr + 'T12:00:00').getDate()}</div>
-              </div>
+            const bg = status === 'good' ? 'rgba(0,206,201,0.15)'
+              : status === 'warn' ? 'rgba(253,203,110,0.15)'
+              : status === 'bad' ? 'rgba(255,118,117,0.15)'
+              : 'rgba(255,255,255,0.03)'
+            const accent = status === 'good' ? 'var(--success)'
+              : status === 'warn' ? 'var(--warning)'
+              : status === 'bad' ? 'var(--danger)'
+              : 'var(--text-muted)'
 
-              <div style={{ flex: 1 }}>
-                <div style={{
-                  height: 8, borderRadius: 4,
-                  background: 'var(--bg-input)', position: 'relative', overflow: 'hidden'
-                }}>
-                  {rec && (
-                    <div style={{
-                      position: 'absolute', left: 0, top: 0, height: '100%',
-                      width: `${Math.min((hours / goalH) * 100, 100)}%`,
-                      background: statusColor, borderRadius: 4,
-                      transition: 'width 0.3s'
-                    }} />
-                  )}
-                </div>
-              </div>
+            return (
+              <div
+                key={i}
+                className="flex-col items-center justify-center cursor-pointer transition-all"
+                onClick={() => setSelectedDate(dateStr === selectedDate ? null : dateStr)}
+                style={{
+                  aspectRatio: '1',
+                  borderRadius: 12,
+                  background: bg,
+                  border: isSelected ? '2px solid var(--primary-light)'
+                    : isToday ? '2px solid var(--primary)'
+                    : '2px solid transparent',
+                  opacity: isFuture ? 0.3 : 1,
+                  padding: 2,
+                  gap: 1
+                }}
+              >
+                <span style={{
+                  fontSize: '0.58rem', fontWeight: 700, textTransform: 'uppercase',
+                  color: isToday ? 'var(--primary-light)' : 'var(--text-muted)',
+                  letterSpacing: 0.5
+                }}>{DAY_LABELS[i]}</span>
 
-              <div style={{ width: 42, textAlign: 'right' }}>
                 {rec ? (
-                  <span style={{ fontSize: '0.82rem', fontWeight: 800, color: statusColor }}>
-                    {hours.toFixed(1)}h
-                  </span>
+                  <span style={{
+                    fontSize: '1rem', fontWeight: 900, lineHeight: 1,
+                    color: accent
+                  }}>{hours.toFixed(1)}</span>
                 ) : (
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>—</span>
+                  <span style={{
+                    fontSize: '0.85rem', fontWeight: 600, lineHeight: 1,
+                    color: 'var(--text-muted)', opacity: 0.4
+                  }}>—</span>
                 )}
+
+                <span style={{
+                  fontSize: '0.5rem', fontWeight: 600,
+                  color: 'var(--text-muted)', opacity: 0.7
+                }}>obj {goalH}h</span>
               </div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
 
       {selectedDate && (
