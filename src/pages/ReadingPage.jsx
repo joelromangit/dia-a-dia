@@ -166,6 +166,10 @@ function ReadingPage() {
   const [errors, setErrors] = useState({})
   const [editBook, setEditBook] = useState(null)
   const [quickLogBookId, setQuickLogBookId] = useState(null)
+  const [confirmDialog, setConfirmDialog] = useState(null) // { message, onConfirm }
+  const [inputDialog, setInputDialog] = useState(null) // { message, placeholder, onSubmit }
+  const [inputDialogValue, setInputDialogValue] = useState('')
+  const [timerDoneAlert, setTimerDoneAlert] = useState(false)
 
   // Daily goal config
   const [goalModal, setGoalModal] = useState(false)
@@ -212,7 +216,7 @@ function ReadingPage() {
             if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
               new Notification('Tiempo de lectura terminado')
             }
-            alert('Tiempo de lectura terminado')
+            setTimerDoneAlert(true)
             return 0
           }
           return prev - 1
@@ -790,14 +794,21 @@ function ReadingPage() {
                   reader.readAsDataURL(file)
                 })
               }
-              const caption = prompt('Descripcion de la foto (opcional):') || ''
-              const dbPhoto = await readingDb.addGalleryPhoto(detail.id, url, caption)
-              const photo = dbPhoto || { id: Date.now(), url, caption, date: new Date().toISOString() }
-              setBooks(prev => prev.map(b => {
-                if (b.id !== detail.id) return b
-                const gallery = b.gallery || []
-                return { ...b, gallery: [...gallery, photo] }
-              }))
+              setInputDialogValue('')
+              setInputDialog({
+                message: 'Descripcion de la foto (opcional)',
+                placeholder: 'Ej: Pagina 42 - concepto clave',
+                onSubmit: async (caption) => {
+                  const dbPhoto = await readingDb.addGalleryPhoto(detail.id, url, caption)
+                  const photo = dbPhoto || { id: Date.now(), url, caption, date: new Date().toISOString() }
+                  setBooks(prev => prev.map(b => {
+                    if (b.id !== detail.id) return b
+                    const gallery = b.gallery || []
+                    return { ...b, gallery: [...gallery, photo] }
+                  }))
+                  setInputDialog(null)
+                }
+              })
             }} />
           </label>
 
@@ -1095,6 +1106,46 @@ function ReadingPage() {
             </div>
           </div>
         )}
+
+        {/* Custom dialogs for detail view */}
+        {confirmDialog && (
+          <div className="modal-overlay" onClick={() => setConfirmDialog(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>Confirmar</h2>
+              <p style={{ fontSize: '0.88rem', marginBottom: 16 }}>{confirmDialog.message}</p>
+              <div className="flex gap-2">
+                <button className="btn btn-outline btn-block" onClick={() => setConfirmDialog(null)}>Cancelar</button>
+                <button className="btn btn-block border-none" style={{ background: 'var(--danger)', color: 'white' }}
+                  onClick={confirmDialog.onConfirm}>Eliminar</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {inputDialog && (
+          <div className="modal-overlay" onClick={() => setInputDialog(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>{inputDialog.message}</h2>
+              <div className="form-group">
+                <input value={inputDialogValue} onChange={e => setInputDialogValue(e.target.value)}
+                  placeholder={inputDialog.placeholder || ''}
+                  onKeyDown={e => e.key === 'Enter' && inputDialog.onSubmit(inputDialogValue)} autoFocus />
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button className="btn btn-outline btn-block" onClick={() => inputDialog.onSubmit('')}>Saltar</button>
+                <button className="btn btn-primary btn-block" onClick={() => inputDialog.onSubmit(inputDialogValue)}>Guardar</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {timerDoneAlert && (
+          <div className="modal-overlay" onClick={() => setTimerDoneAlert(false)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>Tiempo completado</h2>
+              <p style={{ fontSize: '0.88rem', marginBottom: 16 }}>Tu sesion de lectura ha terminado.</p>
+              <button className="btn btn-primary btn-block" onClick={() => setTimerDoneAlert(false)}>Entendido</button>
+            </div>
+          </div>
+        )}
       </>
     )
   }
@@ -1213,10 +1264,14 @@ function ReadingPage() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    if (confirm('Eliminar "' + book.title + '"?')) {
-                      setBooks(books.filter(b => b.id !== book.id))
-                      readingDb.deleteBook(book.id)
-                    }
+                    setConfirmDialog({
+                      message: 'Eliminar "' + book.title + '"?',
+                      onConfirm: () => {
+                        setBooks(prev => prev.filter(b => b.id !== book.id))
+                        readingDb.deleteBook(book.id)
+                        setConfirmDialog(null)
+                      }
+                    })
                   }}
                   className="book-delete-btn btn-ghost"
                   style={{
@@ -1288,10 +1343,14 @@ function ReadingPage() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    if (confirm('Eliminar "' + book.title + '"?')) {
-                      setBooks(books.filter(b => b.id !== book.id))
-                      readingDb.deleteBook(book.id)
-                    }
+                    setConfirmDialog({
+                      message: 'Eliminar "' + book.title + '"?',
+                      onConfirm: () => {
+                        setBooks(prev => prev.filter(b => b.id !== book.id))
+                        readingDb.deleteBook(book.id)
+                        setConfirmDialog(null)
+                      }
+                    })
                   }}
                   className="book-delete-btn btn-ghost"
                   style={{
@@ -1325,10 +1384,14 @@ function ReadingPage() {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    if (confirm('Eliminar "' + book.title + '"?')) {
-                      setBooks(books.filter(b => b.id !== book.id))
-                      readingDb.deleteBook(book.id)
-                    }
+                    setConfirmDialog({
+                      message: 'Eliminar "' + book.title + '"?',
+                      onConfirm: () => {
+                        setBooks(prev => prev.filter(b => b.id !== book.id))
+                        readingDb.deleteBook(book.id)
+                        setConfirmDialog(null)
+                      }
+                    })
                   }}
                   className="book-delete-btn btn-ghost"
                   style={{
@@ -1574,6 +1637,54 @@ function ReadingPage() {
             <div className="text-xs text-muted text-center mt-2">
               Hover sobre un dia para ver detalles
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm dialog (replaces native confirm) */}
+      {confirmDialog && (
+        <div className="modal-overlay" onClick={() => setConfirmDialog(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2>Confirmar</h2>
+            <p style={{ fontSize: '0.88rem', marginBottom: 16 }}>{confirmDialog.message}</p>
+            <div className="flex gap-2">
+              <button className="btn btn-outline btn-block" onClick={() => setConfirmDialog(null)}>Cancelar</button>
+              <button className="btn btn-block border-none" style={{ background: 'var(--danger)', color: 'white' }}
+                onClick={confirmDialog.onConfirm}>Eliminar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Input dialog (replaces native prompt) */}
+      {inputDialog && (
+        <div className="modal-overlay" onClick={() => { setInputDialog(null) }}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2>{inputDialog.message}</h2>
+            <div className="form-group">
+              <input
+                value={inputDialogValue}
+                onChange={e => setInputDialogValue(e.target.value)}
+                placeholder={inputDialog.placeholder || ''}
+                onKeyDown={e => e.key === 'Enter' && inputDialog.onSubmit(inputDialogValue)}
+                autoFocus
+              />
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button className="btn btn-outline btn-block" onClick={() => { inputDialog.onSubmit(''); }}>Saltar</button>
+              <button className="btn btn-primary btn-block" onClick={() => inputDialog.onSubmit(inputDialogValue)}>Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Timer done alert (replaces native alert) */}
+      {timerDoneAlert && (
+        <div className="modal-overlay" onClick={() => setTimerDoneAlert(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h2>Tiempo completado</h2>
+            <p style={{ fontSize: '0.88rem', marginBottom: 16 }}>Tu sesion de lectura ha terminado.</p>
+            <button className="btn btn-primary btn-block" onClick={() => setTimerDoneAlert(false)}>Entendido</button>
           </div>
         </div>
       )}
