@@ -23,7 +23,7 @@ function BookCover({ book, size = 'md', onClick }) {
   const isWishlist = book.status === 'wishlist'
 
   return (
-    <div onClick={onClick} style={{
+    <div onClick={onClick} className={onClick ? 'book-cover-hover' : ''} style={{
       width: s.width, height: s.height, borderRadius: 8,
       position: 'relative', overflow: 'hidden', flexShrink: 0,
       cursor: onClick ? 'pointer' : undefined,
@@ -1205,11 +1205,30 @@ function ReadingPage() {
             const progress = Math.round((book.currentPage / book.totalPages) * 100)
             const todayEntry = book.dailyLog?.find(l => l.date === todayStr)
             return (
-              <div key={book.id} onClick={() => setActiveBook(book.id)} className="flex gap-14 cursor-pointer transition-all mx-16 mb-3 rounded" style={{
+              <div key={book.id} onClick={() => setActiveBook(book.id)} className="flex gap-14 cursor-pointer transition-all mx-16 mb-3 rounded book-card-hover" style={{
                 border: `1px solid ${book.coverColor}30`,
                 background: `linear-gradient(135deg, ${book.coverColor}08 0%, transparent 100%)`,
-                padding: 14
+                padding: 14, position: 'relative'
               }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (confirm('Eliminar "' + book.title + '"?')) {
+                      setBooks(books.filter(b => b.id !== book.id))
+                      readingDb.deleteBook(book.id)
+                    }
+                  }}
+                  className="book-delete-btn btn-ghost"
+                  style={{
+                    position: 'absolute', top: 8, right: 8,
+                    background: 'rgba(0,0,0,0.5)', borderRadius: '50%',
+                    width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    opacity: 0, transition: 'opacity 0.2s', zIndex: 2,
+                    border: 'none', padding: 0,
+                  }}
+                >
+                  <Trash2 size={12} style={{ color: 'var(--danger)' }} />
+                </button>
                 <BookCover book={book} size="sm" />
                 <div className="flex-1 min-w-0 flex-col justify-center" style={{ display: 'flex' }}>
                   <div className="font-700 text-md mb-1">{book.title}</div>
@@ -1265,7 +1284,26 @@ function ReadingPage() {
           </div>
           <div className="grid-auto-fill-90 px-16" style={{ paddingBottom: 12 }}>
             {done.map(book => (
-              <div key={book.id} className="flex-col items-center gap-6" style={{ display: 'flex' }}>
+              <div key={book.id} className="flex-col items-center gap-6 book-card-hover" style={{ display: 'flex', position: 'relative' }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (confirm('Eliminar "' + book.title + '"?')) {
+                      setBooks(books.filter(b => b.id !== book.id))
+                      readingDb.deleteBook(book.id)
+                    }
+                  }}
+                  className="book-delete-btn btn-ghost"
+                  style={{
+                    position: 'absolute', top: -4, right: -4,
+                    background: 'rgba(0,0,0,0.6)', borderRadius: '50%',
+                    width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    opacity: 0, transition: 'opacity 0.2s', zIndex: 2,
+                    border: 'none', padding: 0,
+                  }}
+                >
+                  <Trash2 size={10} style={{ color: 'var(--danger)' }} />
+                </button>
                 <BookCover book={book} size="md" onClick={() => setActiveBook(book.id)} />
                 <div className="text-0\\.65 font-600 text-center text-muted line-clamp-2 leading-tight" style={{ maxWidth: 100 }}>
                   {book.title}
@@ -1283,7 +1321,26 @@ function ReadingPage() {
           </div>
           <div className="grid-auto-fill-90 px-16" style={{ paddingBottom: 12 }}>
             {wishlist.map(book => (
-              <div key={book.id} className="flex-col items-center gap-6" style={{ display: 'flex' }}>
+              <div key={book.id} className="flex-col items-center gap-6 book-card-hover" style={{ display: 'flex', position: 'relative' }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (confirm('Eliminar "' + book.title + '"?')) {
+                      setBooks(books.filter(b => b.id !== book.id))
+                      readingDb.deleteBook(book.id)
+                    }
+                  }}
+                  className="book-delete-btn btn-ghost"
+                  style={{
+                    position: 'absolute', top: -4, right: -4,
+                    background: 'rgba(0,0,0,0.6)', borderRadius: '50%',
+                    width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    opacity: 0, transition: 'opacity 0.2s', zIndex: 2,
+                    border: 'none', padding: 0,
+                  }}
+                >
+                  <Trash2 size={10} style={{ color: 'var(--danger)' }} />
+                </button>
                 <BookCover book={book} size="md" onClick={() => setActiveBook(book.id)} />
                 <div className="text-0\\.65 font-600 text-center text-muted line-clamp-2 leading-tight" style={{ maxWidth: 100 }}>
                   {book.title}

@@ -48,7 +48,7 @@ body {
 
 .app-container {
   flex: 1;
-  padding-bottom: 90px;
+  padding-bottom: 100px;
   max-width: 600px;
   margin: 0 auto;
   width: 100%;
@@ -57,7 +57,7 @@ body {
 @media (min-width: 768px) {
   .app-container {
     max-width: 700px;
-    padding-bottom: 20px;
+    padding-bottom: 100px;
     padding-top: 20px;
   }
 }
@@ -255,6 +255,11 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+.nav-item:hover {
+  color: var(--primary-light);
+  background: rgba(108,92,231,0.06);
+}
+
 .nav-item:active {
   transform: scale(0.92);
 }
@@ -423,7 +428,10 @@ input, textarea, select {
   transition: border-color 0.2s;
 }
 
-input:focus, textarea:focus, select:focus { border-color: var(--primary); }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(108,92,231,0.15);
+}
 
 .exercise-item {
   display: flex;
@@ -863,6 +871,10 @@ input:focus, textarea:focus, select:focus { border-color: var(--primary); }
 
 /* ========== DESKTOP (>1024px) ========== */
 @media (min-width: 1024px) {
+  .app-container {
+    max-width: 960px;
+    padding-bottom: 100px;
+  }
   .page-container {
     max-width: 1200px;
     margin: 0 auto;
@@ -894,5 +906,85 @@ input:focus, textarea:focus, select:focus { border-color: var(--primary); }
   }
   .study-corrections-desktop {
     max-width: 600px;
+  }
+}
+
+/* ========== HOVER EFFECTS ========== */
+
+/* Button hovers */
+.btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+.btn-outline:hover {
+  background: rgba(255,255,255,0.05);
+}
+.btn-ghost:hover {
+  background: rgba(255,255,255,0.08);
+}
+
+/* Card hovers */
+.card:hover, .bg-card:hover {
+  border-color: rgba(255,255,255,0.1);
+}
+
+/* Clickable cards */
+.cursor-pointer:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+/* KPI card hover */
+.kpi-card:hover {
+  border-color: rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.03);
+}
+
+/* Checkbox hover */
+.checkbox:hover {
+  border-color: var(--primary-light) !important;
+  transform: scale(1.1);
+}
+
+/* Delete button show on parent hover */
+.book-card-hover:hover .book-delete-btn {
+  opacity: 1 !important;
+}
+
+/* Transition for all interactive elements */
+.btn, .btn-ghost, .nav-item, .card, .kpi-card, .checkbox, .cursor-pointer {
+  transition: all 0.15s ease;
+}
+
+/* Section header hover */
+.section-title {
+  transition: color 0.15s;
+}
+
+/* Modal overlay animation */
+.modal-overlay {
+  animation: fadeIn 0.15s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Book cover hover */
+.book-cover-hover:hover {
+  transform: scale(1.03);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+}
+
+/* Progress bar animated */
+.progress-fill, .progress-bar > div {
+  transition: width 0.5s ease;
+}
+
+/* Mobile: delete buttons slightly visible (no hover on touch) */
+@media (max-width: 767px) {
+  .book-delete-btn {
+    opacity: 0.5 !important;
   }
 }
