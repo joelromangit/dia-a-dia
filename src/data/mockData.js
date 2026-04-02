@@ -4,7 +4,6 @@ import estadistica from './topics/estadistica'
 import funciones from './topics/funciones'
 import derivadas from './topics/derivadas'
 import optimizacion from './topics/optimizacion'
-import integrales from './topics/integrales'
 
 export const mockReading = {
   dailyGoalPages: 30,
@@ -1051,22 +1050,13 @@ export const mockStudy = {
           ]
         },
         { ...sistemas, order: 2 },
-        { ...funciones, order: 3 },
-        { ...derivadas, order: 4 },
-        { ...optimizacion, order: 5 },
-        { ...probabilidad, order: 6 },
-        { ...estadistica, order: 7 },
-        { ...integrales, order: 8 }
+        { ...probabilidad, order: 3 },
+        { ...estadistica, order: 4 },
+        { ...funciones, order: 5 },
+        { ...derivadas, order: 6 },
+        { ...optimizacion, order: 7 }
       ],
-      weeklyPlan: [
-        { day: "Lunes", task: "Tipos de matrices", topic: "Matrices", blockId: 1, done: false },
-        { day: "Martes", task: "Suma, resta y escalar", topic: "Matrices", blockId: 2, done: false },
-        { day: "Miercoles", task: "Traspuesta", topic: "Matrices", blockId: 3, done: false },
-        { day: "Jueves", task: "Multiplicacion de matrices", topic: "Matrices", blockId: 4, done: false },
-        { day: "Viernes", task: "Determinantes", topic: "Matrices", blockId: 5, done: false },
-        { day: "Sabado", task: "Adjunta y cofactores", topic: "Matrices", blockId: 6, done: false },
-        { day: "Domingo", task: "Repaso: Matriz inversa", topic: "Matrices", blockId: 7, done: false }
-      ]
+      weeklyPlan: []
     }
   ]
 };

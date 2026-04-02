@@ -385,6 +385,34 @@ export const gymDb = {
   },
 }
 
+// ============ APP STATE (key-value for study) ============
+export const appStateDb = {
+  async get(key) {
+    if (!db) return null
+    try {
+      const { data, error } = await supabase.from('app_state').select('value').eq('key', key).single()
+      if (error && error.code !== 'PGRST116') throw error // PGRST116 = not found
+      return data?.value || null
+    } catch (err) {
+      console.error('appStateDb.get failed:', err)
+      return null
+    }
+  },
+
+  async set(key, value) {
+    if (!db) return
+    try {
+      const { error } = await supabase.from('app_state').upsert(
+        { key, value, updated_at: new Date().toISOString() },
+        { onConflict: 'key' }
+      )
+      if (error) throw error
+    } catch (err) {
+      console.error('appStateDb.set failed:', err)
+    }
+  },
+}
+
 // ============ READING ============
 export const readingDb = {
   async getBooks() {
@@ -394,13 +422,16 @@ export const readingDb = {
       if (e1) throw e1
       const { data: logs, error: e2 } = await supabase.from('reading_log').select('*').order('date', { ascending: false })
       if (e2) throw e2
+      const { data: gallery, error: e3 } = await supabase.from('book_gallery').select('*').order('created_at', { ascending: false })
+      if (e3) throw e3
       return books?.map(b => ({
         id: b.id, title: b.title, author: b.author,
         cover: b.cover_url, coverColor: b.cover_color,
         totalPages: b.total_pages, currentPage: b.current_page,
         status: b.status, startDate: b.start_date,
         goal: b.goal, notes: b.notes,
-        dailyLog: (logs || []).filter(l => l.book_id === b.id).map(l => ({ date: l.date, pages: l.pages }))
+        dailyLog: (logs || []).filter(l => l.book_id === b.id).map(l => ({ date: l.date, pages: l.pages })),
+        gallery: (gallery || []).filter(g => g.book_id === b.id).map(g => ({ id: g.id, url: g.url, caption: g.caption || '', date: g.created_at }))
       }))
     } catch (err) {
       console.error('readingDb.getBooks failed:', err)
@@ -484,6 +515,43 @@ export const readingDb = {
     } catch (err) {
       console.error('readingDb.uploadCover failed:', err)
       return null
+    }
+  },
+
+  // Gallery
+  async getGallery(bookId) {
+    if (!db) return []
+    try {
+      const { data, error } = await supabase.from('book_gallery').select('*').eq('book_id', bookId).order('created_at', { ascending: false })
+      if (error) throw error
+      return (data || []).map(g => ({ id: g.id, url: g.url, caption: g.caption || '', date: g.created_at }))
+    } catch (err) {
+      console.error('readingDb.getGallery failed:', err)
+      return []
+    }
+  },
+
+  async addGalleryPhoto(bookId, url, caption) {
+    if (!db) return null
+    try {
+      const { data, error } = await supabase.from('book_gallery')
+        .insert({ book_id: bookId, url, caption: caption || '' })
+        .select().single()
+      if (error) throw error
+      return data ? { id: data.id, url: data.url, caption: data.caption, date: data.created_at } : null
+    } catch (err) {
+      console.error('readingDb.addGalleryPhoto failed:', err)
+      return null
+    }
+  },
+
+  async deleteGalleryPhoto(id) {
+    if (!db) return
+    try {
+      const { error } = await supabase.from('book_gallery').delete().eq('id', id)
+      if (error) throw error
+    } catch (err) {
+      console.error('readingDb.deleteGalleryPhoto failed:', err)
     }
   },
 }

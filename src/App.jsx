@@ -28,7 +28,7 @@ function App() {
           </NavLink>
           <NavLink to="/sleep" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
             <Moon size={22} />
-            <span>Sueno</span>
+            <span>Sue&ntilde;o</span>
           </NavLink>
           <NavLink to="/gym" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
             <Dumbbell size={22} />

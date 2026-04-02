@@ -264,6 +264,18 @@ function SleepPage() {
       }).length / recentRecords.length) * 100)
     : 0
 
+  const sleepDebt = (() => {
+    let debt = 0
+    weekDays.forEach(dateStr => {
+      if (dateStr > todayStr) return
+      const rec = recordMap[dateStr]
+      const goalH = getGoalHoursForDate(dateStr)
+      const actual = rec ? calcHours(rec.bedtime, rec.wakeup) : 0
+      debt += goalH - actual
+    })
+    return Math.max(0, parseFloat(debt.toFixed(1)))
+  })()
+
   const selRecord = selectedDate ? recordMap[selectedDate] : null
   const selSchedule = selectedDate ? getScheduleForDate(selectedDate, schedules) : null
 
@@ -351,10 +363,10 @@ function SleepPage() {
 
       <div className="kpi-grid">
         <div className="kpi-card">
-          <div className="kpi-value" style={{ color: parseFloat(avgHours) >= 7.5 ? 'var(--success)' : 'var(--warning)' }}>
+          <div className="kpi-value" style={{ color: parseFloat(avgHours) >= 7.5 ? 'var(--success)' : parseFloat(avgHours) >= 6.5 ? 'var(--warning)' : 'var(--danger)' }}>
             {avgHours}h
           </div>
-          <div className="kpi-label">Media 7 días</div>
+          <div className="kpi-label">Media 7 dias</div>
         </div>
         <div className="kpi-card">
           <div className="kpi-value" style={{ color: consistency >= 70 ? 'var(--success)' : consistency >= 40 ? 'var(--warning)' : 'var(--danger)' }}>
@@ -362,7 +374,54 @@ function SleepPage() {
           </div>
           <div className="kpi-label">Consistencia</div>
         </div>
+        <div className="kpi-card">
+          <div className="kpi-value" style={{ color: sleepDebt <= 2 ? 'var(--success)' : sleepDebt <= 5 ? 'var(--warning)' : 'var(--danger)' }}>
+            {sleepDebt}h
+          </div>
+          <div className="kpi-label">Deuda de sueno</div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-value">
+            {records.length}
+          </div>
+          <div className="kpi-label">Registros</div>
+        </div>
       </div>
+
+      {/* Last night summary */}
+      {(() => {
+        const yesterdayStr = (() => { const d = new Date(); d.setDate(d.getDate() - 1); return d.toISOString().split('T')[0] })()
+        const lastRec = recordMap[todayStr] || recordMap[yesterdayStr]
+        const lastDate = recordMap[todayStr] ? todayStr : recordMap[yesterdayStr] ? yesterdayStr : null
+        if (!lastRec || !lastDate) return null
+        const hours = calcHours(lastRec.bedtime, lastRec.wakeup)
+        const goalH = getGoalHoursForDate(lastDate)
+        const diff = hours - goalH
+        const status = diff >= -0.25 ? 'good' : diff >= -1 ? 'warn' : 'bad'
+        const color = status === 'good' ? 'var(--success)' : status === 'warn' ? 'var(--warning)' : 'var(--danger)'
+        const label = lastDate === todayStr ? 'Anoche' : 'Anteanoche'
+        return (
+          <div className="mx-16 mb-3 rounded-sm border" style={{ background: 'var(--bg-card)', padding: '12px 16px' }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs text-muted font-600 text-uppercase">{label}</div>
+                <div className="flex items-center gap-8 mt-1">
+                  <span className="font-800" style={{ fontSize: '1.2rem', color }}>{hours.toFixed(1)}h</span>
+                  <span className="text-xs" style={{ color }}>
+                    {diff >= 0 ? '+' : ''}{diff.toFixed(1)}h vs objetivo
+                  </span>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs text-muted">{lastRec.bedtime} → {lastRec.wakeup}</div>
+                <div className="text-xs font-700 mt-1" style={{ color }}>
+                  {status === 'good' ? 'Buen descanso' : status === 'warn' ? 'Puede mejorar' : 'Poco sueno'}
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {schedules.length > 0 && (
         <div className="px-16 flex gap-8 overflow-x-auto" style={{ paddingBottom: 8 }}>
@@ -377,6 +436,34 @@ function SleepPage() {
           ))}
         </div>
       )}
+
+      {/* Tonight's bedtime recommendation */}
+      {(() => {
+        const tonightSchedule = getScheduleForDate(todayStr, schedules)
+        if (!tonightSchedule) return null
+        const hasLoggedToday = !!recordMap[todayStr]
+        if (hasLoggedToday) return null
+        return (
+          <div className="mx-16 mb-2 rounded-sm" style={{
+            padding: '10px 14px',
+            background: 'rgba(108,92,231,0.08)',
+            border: '1px solid rgba(108,92,231,0.2)',
+          }}>
+            <div className="flex items-center gap-8">
+              <Moon size={16} style={{ color: 'var(--primary-light)', flexShrink: 0 }} />
+              <div>
+                <div className="text-xs font-700" style={{ color: 'var(--primary-light)' }}>
+                  Esta noche a dormir a las {tonightSchedule.bedtime}
+                </div>
+                <div className="text-xs text-muted">
+                  Despertar: {tonightSchedule.wakeup} · {calcHours(tonightSchedule.bedtime, tonightSchedule.wakeup)}h de sueno
+                  {tonightSchedule.cycles && ` · ${tonightSchedule.cycles} ciclos`}
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       <div className="section-header">
         <span className="section-title">Esta semana</span>
@@ -449,6 +536,30 @@ function SleepPage() {
           })}
         </div>
       </div>
+
+      {/* Weekly trend */}
+      {(() => {
+        const thisWeekHours = weekDays.filter(d => d <= todayStr && recordMap[d]).map(d => calcHours(recordMap[d].bedtime, recordMap[d].wakeup))
+        const prevWeekDays = weekDays.map(d => {
+          const prev = new Date(d + 'T12:00:00')
+          prev.setDate(prev.getDate() - 7)
+          return prev.toISOString().split('T')[0]
+        })
+        const prevWeekHours = prevWeekDays.filter(d => recordMap[d]).map(d => calcHours(recordMap[d].bedtime, recordMap[d].wakeup))
+        const thisAvg = thisWeekHours.length > 0 ? thisWeekHours.reduce((a, b) => a + b, 0) / thisWeekHours.length : 0
+        const prevAvg = prevWeekHours.length > 0 ? prevWeekHours.reduce((a, b) => a + b, 0) / prevWeekHours.length : 0
+        if (prevAvg === 0 || thisWeekHours.length === 0) return null
+        const diff = thisAvg - prevAvg
+        const improving = diff > 0.1
+        const declining = diff < -0.1
+        return (
+          <div className="text-xs text-center" style={{ padding: '0 16px 8px', color: improving ? 'var(--success)' : declining ? 'var(--danger)' : 'var(--text-muted)' }}>
+            {improving ? 'Mejorando vs semana pasada (+' + diff.toFixed(1) + 'h media)'
+              : declining ? 'Empeorando vs semana pasada (' + diff.toFixed(1) + 'h media)'
+              : 'Igual que la semana pasada'}
+          </div>
+        )
+      })()}
 
       {selectedDate && (
         <div className="rounded border bg-card overflow-hidden mx-16 mb-3">

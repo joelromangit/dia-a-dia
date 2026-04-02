@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import {
   Plus, Check, Trash2, Settings, X, ChevronLeft, ChevronRight,
   Calculator, Leaf, FlaskConical, BookOpen, Globe, Atom,
@@ -11,6 +11,7 @@ import { mockStudy } from '../data/mockData'
 import { sendWhatsAppNotification } from '../lib/notifications'
 import { useAdmin } from '../contexts/AdminContext'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
+import { appStateDb } from '../lib/db'
 
 function MathText({ text }) {
   if (!text) return null
@@ -181,24 +182,166 @@ function generateTopicPlan(topic) {
   }))
 }
 
-// ========== SUBMITTED EXERCISES STORAGE (Task 3) ==========
-const SUBMISSIONS_KEY = 'submitted_exercises'
-
-function loadSubmissions() {
-  try {
-    const saved = localStorage.getItem(SUBMISSIONS_KEY)
-    return saved ? JSON.parse(saved) : []
-  } catch { return [] }
+// ========== DATE-BASED STUDY PLAN ==========
+const PLAN_START_DATE = '2026-04-06' // Monday April 6
+// Matrices has a special split: 3 easy blocks on Monday, then 1/day
+// Other topics default to 1 block per weekday
+const TOPIC_DAY_SPLITS = {
+  'Matrices': [[1, 2, 3], [4], [5], [6], [7]],
 }
 
-function saveSubmissions(submissions) {
-  try {
-    localStorage.setItem(SUBMISSIONS_KEY, JSON.stringify(submissions))
-  } catch {}
+function getNextWeekday(date) {
+  const d = new Date(date)
+  d.setDate(d.getDate() + 1)
+  while (d.getDay() === 0 || d.getDay() === 6) {
+    d.setDate(d.getDate() + 1)
+  }
+  return d
 }
 
-function SubmissionStatusBadge({ exerciseId }) {
-  const submissions = loadSubmissions()
+function formatDate(d) {
+  return d.toISOString().split('T')[0]
+}
+
+function generateFullPlan(subjects) {
+  const plan = []
+  let currentDate = new Date(PLAN_START_DATE + 'T12:00:00')
+  // Ensure we start on a weekday
+  while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+    currentDate = getNextWeekday(currentDate)
+  }
+
+  for (const subject of subjects) {
+    const sortedTopics = [...subject.topics].sort((a, b) => a.order - b.order)
+    for (const topic of sortedTopics) {
+      const blocks = topic.theoryBlocks || []
+      if (blocks.length === 0) continue
+
+      const customSplit = TOPIC_DAY_SPLITS[topic.name]
+      if (customSplit) {
+        // Use custom block grouping
+        for (const blockGroup of customSplit) {
+          const dayBlocks = blockGroup.map(bid => blocks.find(b => b.id === bid)).filter(Boolean)
+          if (dayBlocks.length === 0) continue
+          for (const block of dayBlocks) {
+            plan.push({
+              date: formatDate(currentDate),
+              blockId: block.id,
+              topicName: topic.name,
+              topicOrder: topic.order,
+              subjectId: subject.id,
+              task: block.title,
+              completed: block.status === 'completed',
+              completedDate: null,
+              isAhead: false,
+            })
+          }
+          currentDate = getNextWeekday(currentDate)
+        }
+      } else {
+        // Default: 1 block per weekday
+        for (const block of blocks) {
+          plan.push({
+            date: formatDate(currentDate),
+            blockId: block.id,
+            topicName: topic.name,
+            topicOrder: topic.order,
+            subjectId: subject.id,
+            task: block.title,
+            completed: block.status === 'completed',
+            completedDate: null,
+            isAhead: false,
+          })
+          currentDate = getNextWeekday(currentDate)
+        }
+      }
+    }
+  }
+  return plan
+}
+
+function recalculatePlan(plan, subjects) {
+  // Sync completion status from subjects data
+  const updated = plan.map(entry => {
+    const subject = subjects.find(s => s.id === entry.subjectId)
+    if (!subject) return entry
+    const topic = subject.topics.find(t => t.name === entry.topicName)
+    if (!topic) return entry
+    const block = (topic.theoryBlocks || []).find(b => b.id === entry.blockId)
+    if (!block) return entry
+    const isCompleted = block.status === 'completed'
+    if (isCompleted && !entry.completed) {
+      const today = formatDate(new Date())
+      const isAhead = today < entry.date
+      return { ...entry, completed: true, completedDate: today, isAhead }
+    }
+    return { ...entry, completed: isCompleted }
+  })
+
+  // Shift: find first incomplete entry, recalculate dates from today or its original date
+  const firstIncomplete = updated.findIndex(e => !e.completed)
+  if (firstIncomplete < 0) return updated
+
+  // Count how many days were gained (completed ahead)
+  const aheadEntries = updated.slice(0, firstIncomplete).filter(e => e.isAhead)
+  if (aheadEntries.length === 0) return updated
+
+  // Reassign dates for incomplete entries starting from earliest available weekday
+  let nextDate = new Date()
+  // Start from tomorrow if today still has incomplete work, or today if nothing planned today
+  const todayStr = formatDate(new Date())
+  const todayHasIncomplete = updated.some(e => e.date === todayStr && !e.completed)
+  if (todayHasIncomplete) {
+    // Keep today's date, shift from tomorrow
+    let shiftFrom = firstIncomplete
+    // Find entries after today
+    const afterToday = updated.findIndex((e, i) => i >= firstIncomplete && e.date > todayStr)
+    if (afterToday >= 0) {
+      shiftFrom = afterToday
+    } else {
+      return updated
+    }
+    nextDate = getNextWeekday(new Date(todayStr + 'T12:00:00'))
+
+    // Group incomplete entries by original date to preserve day-groupings
+    let lastOrigDate = null
+    for (let i = shiftFrom; i < updated.length; i++) {
+      if (updated[i].completed) continue
+      if (lastOrigDate !== null && updated[i].date === lastOrigDate) {
+        // Same day group - keep same new date
+        updated[i] = { ...updated[i], date: formatDate(nextDate) }
+      } else {
+        if (lastOrigDate !== null) {
+          nextDate = getNextWeekday(nextDate)
+        }
+        lastOrigDate = updated[i].date
+        updated[i] = { ...updated[i], date: formatDate(nextDate) }
+      }
+    }
+  }
+
+  return updated
+}
+
+// Helper to get plan entries for a specific date range (week)
+function getPlanForWeek(plan, weekStart) {
+  const start = new Date(weekStart + 'T00:00:00')
+  const end = new Date(start)
+  end.setDate(start.getDate() + 6)
+  const endStr = formatDate(end)
+  const startStr = formatDate(start)
+  return plan.filter(e => e.date >= startStr && e.date <= endStr)
+}
+
+function getWeekMonday(date) {
+  const d = new Date(date)
+  const day = d.getDay()
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+  d.setDate(diff)
+  return formatDate(d)
+}
+
+function SubmissionStatusBadge({ exerciseId, submissions = [] }) {
   const sub = submissions.find(s => s.exerciseId === exerciseId)
   if (!sub) return null
   if (sub.status === 'approved') {
@@ -378,7 +521,7 @@ function AutoExerciseFillBlank({ exercise, onAnswer }) {
   )
 }
 
-function ManualExercise({ exercise, onPhotoUpload }) {
+function ManualExercise({ exercise, onPhotoUpload, submissions }) {
   const fileRef = useRef(null)
   const isDone = exercise.status === 'done' || exercise.status === 'submitted'
 
@@ -400,7 +543,7 @@ function ManualExercise({ exercise, onPhotoUpload }) {
             <Send size={14} style={{ color: 'var(--primary-light)' }} />
             <span className="text-xs text-primary-light font-600">Enviado para correccion</span>
           </div>
-          <SubmissionStatusBadge exerciseId={exercise.id} />
+          <SubmissionStatusBadge exerciseId={exercise.id} submissions={submissions} />
         </div>
       )}
       {!exercise.photoUrl && exercise.status !== 'submitted' && (
@@ -431,7 +574,7 @@ function ManualExercise({ exercise, onPhotoUpload }) {
   )
 }
 
-function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPhotoUpload, onSubmitForReview, expandedBlockId }) {
+function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPhotoUpload, onSubmitForReview, onForceUnlock, onForceComplete, onReopen, expandedBlockId, submissions }) {
   const blockStatus = block.status || 'available'
   const isLocked = blockStatus === 'locked' && !isAdmin
   const isCompleted = blockStatus === 'completed'
@@ -467,7 +610,6 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
           <div className="flex items-center gap-2">
             <span className="font-600" style={{ fontSize: '0.88rem' }}>{block.title}</span>
             {isCompleted && <CheckCircle size={14} style={{ color: 'var(--success)', flexShrink: 0 }} />}
-            {blockStatus === 'locked' && <Lock size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />}
           </div>
           <div className="text-xs text-muted mt-1">
             {isLocked ? (
@@ -483,8 +625,31 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
             )}
           </div>
         </div>
-        {isLocked ? (
-          <Lock size={18} style={{ color: 'var(--text-muted)' }} />
+        {isCompleted && onReopen && (
+          <button
+            className="btn btn-sm border-none flex-shrink-0"
+            style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', padding: '3px 8px', fontSize: '0.6rem' }}
+            onClick={(e) => { e.stopPropagation(); onReopen(block.id) }}
+          >
+            Reabrir
+          </button>
+        )}
+        {!isCompleted && blockStatus !== 'locked' && onForceComplete && (
+          <button
+            className="btn btn-sm border-none flex-shrink-0"
+            style={{ background: 'rgba(0,206,201,0.12)', color: 'var(--success)', padding: '3px 8px', fontSize: '0.6rem' }}
+            onClick={(e) => { e.stopPropagation(); onForceComplete(block.id) }}
+          >
+            Finalizar
+          </button>
+        )}
+        {blockStatus === 'locked' ? (
+          <Lock
+            size={18}
+            className="cursor-pointer"
+            style={{ color: 'var(--text-muted)' }}
+            onClick={(e) => { e.stopPropagation(); onForceUnlock(block.id) }}
+          />
         ) : expanded ? (
           <ChevronUp size={18} style={{ color: 'var(--text-muted)' }} />
         ) : (
@@ -525,7 +690,7 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
                     <AutoExerciseFillBlank exercise={ex} onAnswer={onExerciseAnswer} />
                   )}
                   {ex.type === 'manual' && (
-                    <ManualExercise exercise={ex} onPhotoUpload={onPhotoUpload} />
+                    <ManualExercise exercise={ex} onPhotoUpload={onPhotoUpload} submissions={submissions} />
                   )}
                 </div>
               ))}
@@ -557,41 +722,97 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
   )
 }
 
-const STUDY_STORAGE_KEY = 'grindset-study-data'
-const STUDY_DATA_VERSION = 5
-
-function loadStudyData() {
-  try {
-    const savedVersion = localStorage.getItem(STUDY_STORAGE_KEY + '-version')
-    if (savedVersion === String(STUDY_DATA_VERSION)) {
-      const saved = localStorage.getItem(STUDY_STORAGE_KEY)
-      if (saved) return JSON.parse(saved)
+// Extract user state from subjects (only mutable data, not curriculum content)
+function extractUserState(subjects) {
+  const state = {}
+  for (const s of subjects) {
+    for (const t of s.topics || []) {
+      state[`topic_${t.order}`] = { status: t.status, extraMaterials: t.extraMaterials || [] }
+      for (const b of t.theoryBlocks || []) {
+        state[`block_${b.id}`] = { status: b.status }
+        for (const ex of b.exercises || []) {
+          if (ex.status !== 'pending') {
+            state[`ex_${ex.id}`] = { status: ex.status, studentAnswer: ex.studentAnswer, photoUrl: ex.photoUrl }
+          }
+        }
+      }
     }
-    localStorage.removeItem(STUDY_STORAGE_KEY)
-  } catch {}
-  return mockStudy.subjects
+  }
+  return state
 }
 
-function saveStudyData(subjects) {
-  try {
-    localStorage.setItem(STUDY_STORAGE_KEY, JSON.stringify(subjects))
-    localStorage.setItem(STUDY_STORAGE_KEY + '-version', String(STUDY_DATA_VERSION))
-  } catch {}
+// Apply user state on top of mock data
+function applyUserState(subjects, userState) {
+  if (!userState) return subjects
+  return subjects.map(s => ({
+    ...s,
+    topics: (s.topics || []).map(t => {
+      const topicState = userState[`topic_${t.order}`]
+      return {
+        ...t,
+        status: topicState?.status || t.status,
+        extraMaterials: topicState?.extraMaterials || t.extraMaterials || [],
+        theoryBlocks: (t.theoryBlocks || []).map(b => {
+          const blockState = userState[`block_${b.id}`]
+          return {
+            ...b,
+            status: blockState?.status || b.status,
+            exercises: (b.exercises || []).map(ex => {
+              const exState = userState[`ex_${ex.id}`]
+              return exState ? { ...ex, ...exState } : ex
+            })
+          }
+        })
+      }
+    })
+  }))
 }
 
 function StudyPage() {
   const { isAdmin } = useAdmin()
-  const [subjects, setSubjectsRaw] = useState(loadStudyData)
+  const [subjects, setSubjectsRaw] = useState(mockStudy.subjects)
+  const [dataLoaded, setDataLoaded] = useState(false)
   const loading = false
   const error = null
+  const saveTimeoutRef = useRef(null)
 
   const setSubjects = useCallback((updater) => {
     setSubjectsRaw(prev => {
       const next = typeof updater === 'function' ? updater(prev) : updater
-      saveStudyData(next)
+      // Debounced save to Supabase
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+      saveTimeoutRef.current = setTimeout(() => {
+        appStateDb.set('study_subjects', extractUserState(next))
+      }, 500)
       return next
     })
   }, [])
+
+  // Date-based plan
+  const [plan, setPlanRaw] = useState(() => generateFullPlan(mockStudy.subjects))
+  const [planWeekOffset, setPlanWeekOffset] = useState(0)
+
+  const setPlan = useCallback((updater) => {
+    setPlanRaw(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      appStateDb.set('study_plan', next)
+      return next
+    })
+  }, [])
+
+  // Sync plan when subjects change (block completions)
+  const syncPlan = useCallback((currentSubjects) => {
+    setPlan(prev => recalculatePlan(prev, currentSubjects))
+  }, [setPlan])
+
+  // Sync plan when block statuses change
+  useEffect(() => {
+    setPlan(prev => {
+      const synced = recalculatePlan(prev, subjects)
+      return JSON.stringify(synced) !== JSON.stringify(prev) ? synced : prev
+    })
+  }, [subjects, setPlan])
+
   const checkAndUnlockBlocks = useCallback((subjectId) => {
     setSubjects(prev => prev.map(s => {
       if (s.id !== subjectId) return s
@@ -652,9 +873,43 @@ function StudyPage() {
   const [showError, setShowError] = useState(true)
   const [selectedPlanTopic, setSelectedPlanTopic] = useState(null)
   const [showCorrections, setShowCorrections] = useState(false)
-  const [submissions, setSubmissions] = useState(loadSubmissions)
+  const [submissions, setSubmissions] = useState([])
   const [feedbackText, setFeedbackText] = useState('')
   const [errors, setErrors] = useState({})
+  const [unlockPrompt, setUnlockPrompt] = useState(null) // { type, subjectId, topicIndex?, blockId? }
+  const [unlockPassword, setUnlockPassword] = useState('')
+  const [unlockError, setUnlockError] = useState(false)
+  const [confirmAction, setConfirmAction] = useState(null) // { message, onConfirm }
+  const [selectedPlanDate, setSelectedPlanDate] = useState(null)
+
+  // Load data from Supabase on mount
+  useEffect(() => {
+    async function loadFromSupabase() {
+      const userState = await appStateDb.get('study_subjects')
+      const loadedSubjects = userState
+        ? applyUserState(mockStudy.subjects, userState)
+        : mockStudy.subjects
+      if (userState) {
+        setSubjectsRaw(loadedSubjects)
+      }
+      const savedPlan = await appStateDb.get('study_plan')
+      if (savedPlan) {
+        setPlanRaw(recalculatePlan(savedPlan, loadedSubjects))
+      }
+      const savedSubs = await appStateDb.get('study_submissions')
+      if (savedSubs) {
+        setSubmissions(savedSubs)
+      }
+      // Select today if it has plan entries
+      const today = formatDate(new Date())
+      const activePlan = savedPlan || generateFullPlan(loadedSubjects)
+      if (activePlan.some(e => e.date === today)) {
+        setSelectedPlanDate(today)
+      }
+      setDataLoaded(true)
+    }
+    loadFromSupabase()
+  }, [])
 
   const detail = activeSubject ? subjects.find(s => s.id === activeSubject) : null
   const currentTopicData = activeTopic && detail
@@ -709,43 +964,37 @@ function StudyPage() {
   }
   const getCompletedTopics = (s) => s.topics.filter(t => getTopicStateFromLegacy(t.status) === 'completed').length
 
-  const totalTasks = subjects.reduce((a, s) => a + getSubjectAllTasks(s).length, 0)
-  const doneTasks = subjects.reduce((a, s) => {
-    const allTasks = getSubjectAllTasks(s)
-    return a + allTasks.filter(t => {
-      if (t.autoComplete || t.done) return true
-      if (t.blockId && t.topic) {
-        const tp = s.topics.find(tt => tt.name === t.topic)
-        if (tp) {
-          const block = (tp.theoryBlocks || []).find(b => b.id === t.blockId)
-          if (block && block.status === 'completed') return true
-        }
-      }
-      return isTaskDone(t, s)
-    }).length
-  }, 0)
+  const totalTasks = plan.length
+  const doneTasks = plan.filter(e => e.completed).length
   const weekProgress = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0
 
-  const dayIndex = (new Date().getDay() + 6) % 7
-  const todayName = DAYS[dayIndex]
-  const todayTasks = subjects.flatMap(s => {
-    const allTasks = getSubjectAllTasks(s)
-    return allTasks
-      .map((t, i) => {
-        let autoComplete = t.autoComplete || false
-        if (t.blockId && t.topic) {
-          const tp = s.topics.find(tt => tt.name === t.topic)
-          if (tp) {
-            const block = (tp.theoryBlocks || []).find(b => b.id === t.blockId)
-            autoComplete = block ? block.status === 'completed' : false
-          }
-        } else if (t.topic) {
-          autoComplete = isTopicExercisesComplete(s, t.topic)
-        }
-        return { ...t, subjectId: s.id, subjectName: s.name, subjectColor: s.color, taskIndex: i, autoComplete }
-      })
-      .filter(t => t.day === todayName)
-  })
+  const todayStr = formatDate(new Date())
+  const todayPlanEntries = plan.filter(e => e.date === todayStr)
+
+  const studyStreak = (() => {
+    let streak = 0
+    const d = new Date()
+    for (let i = 0; i < 365; i++) {
+      const ds = formatDate(d)
+      // Skip weekends
+      if (d.getDay() === 0 || d.getDay() === 6) {
+        d.setDate(d.getDate() - 1)
+        continue
+      }
+      const dayEntries = plan.filter(e => e.date === ds)
+      if (dayEntries.length > 0 && dayEntries.some(e => e.completed)) {
+        streak++
+        d.setDate(d.getDate() - 1)
+      } else if (i === 0) {
+        // Today might not have been started yet
+        d.setDate(d.getDate() - 1)
+        continue
+      } else {
+        break
+      }
+    }
+    return streak
+  })()
 
   const validateAddSubject = () => {
     const errs = {}
@@ -889,6 +1138,147 @@ function StudyPage() {
     }
   }
 
+  // Force unlock: opens password prompt. unlockPrompt = { type: 'topic'|'block', subjectId, topicIndex?, blockId? }
+  const handleForceUnlock = (blockId) => {
+    if (isAdmin) {
+      // Already admin, unlock directly
+      setSubjects(prev => prev.map(s => {
+        if (s.id !== activeSubject) return s
+        return {
+          ...s,
+          topics: s.topics.map(t => ({
+            ...t,
+            theoryBlocks: (t.theoryBlocks || []).map(b =>
+              b.id === blockId ? { ...b, status: 'available' } : b
+            )
+          }))
+        }
+      }))
+    } else {
+      setUnlockPrompt({ type: 'block', subjectId: activeSubject, blockId })
+      setUnlockPassword('')
+      setUnlockError(false)
+    }
+  }
+
+  const tryUnlock = () => {
+    if (unlockPassword !== 'Padel-123') {
+      setUnlockError(true)
+      return
+    }
+    if (unlockPrompt.type === 'topic') {
+      setSubjects(prev => prev.map(s => {
+        if (s.id !== unlockPrompt.subjectId) return s
+        const topics = [...s.topics]
+        topics[unlockPrompt.topicIndex] = { ...topics[unlockPrompt.topicIndex], status: 'available' }
+        return { ...s, topics }
+      }))
+    } else if (unlockPrompt.type === 'block') {
+      setSubjects(prev => prev.map(s => {
+        if (s.id !== unlockPrompt.subjectId) return s
+        return {
+          ...s,
+          topics: s.topics.map(t => ({
+            ...t,
+            theoryBlocks: (t.theoryBlocks || []).map(b =>
+              b.id === unlockPrompt.blockId ? { ...b, status: 'available' } : b
+            )
+          }))
+        }
+      }))
+    }
+    setUnlockPrompt(null)
+    setUnlockPassword('')
+    setUnlockError(false)
+  }
+
+  // Force-complete a topic (skipping remaining exercises)
+  const handleForceCompleteTopic = (subjectId, topicName, topicOrder) => {
+    setSubjects(prev => prev.map(s => {
+      if (s.id !== subjectId) return s
+      let unlockNext = false
+      const topics = s.topics.map((t, i) => {
+        if (t.name !== topicName || t.order !== topicOrder) {
+          // Unlock next topic after the one we just completed
+          if (unlockNext && getTopicStateFromLegacy(t.status) === 'locked') {
+            unlockNext = false
+            return { ...t, status: 'available' }
+          }
+          return t
+        }
+        unlockNext = true
+        return {
+          ...t,
+          status: 'completed',
+          theoryBlocks: (t.theoryBlocks || []).map(b => ({ ...b, status: 'completed' }))
+        }
+      })
+      return { ...s, topics }
+    }))
+  }
+
+  // Reopen a completed topic back to in_progress
+  const handleReopenTopic = (subjectId, topicName, topicOrder) => {
+    setSubjects(prev => prev.map(s => {
+      if (s.id !== subjectId) return s
+      return {
+        ...s,
+        topics: s.topics.map(t => {
+          if (t.name !== topicName || t.order !== topicOrder) return t
+          // Set topic to in_progress, reopen last block that was completed
+          const blocks = (t.theoryBlocks || []).map(b => {
+            if (b.status === 'completed') {
+              // Check if all exercises are actually done
+              const allDone = (b.exercises || []).every(ex =>
+                ex.status === 'done' || ex.status === 'submitted' || ex.status === 'corrected'
+              )
+              return allDone ? b : { ...b, status: 'available' }
+            }
+            return b
+          })
+          return { ...t, status: 'in_progress', theoryBlocks: blocks }
+        })
+      }
+    }))
+  }
+
+  // Force-complete a single block
+  const handleForceCompleteBlock = (blockId) => {
+    setSubjects(prev => prev.map(s => {
+      if (s.id !== activeSubject) return s
+      return {
+        ...s,
+        topics: s.topics.map(t => ({
+          ...t,
+          theoryBlocks: (t.theoryBlocks || []).map((b, i, arr) => {
+            if (b.id === blockId) return { ...b, status: 'completed' }
+            // Unlock the block right after the one we completed
+            if (i > 0 && arr[i - 1].id === blockId && b.status === 'locked') {
+              return { ...b, status: 'available' }
+            }
+            return b
+          })
+        }))
+      }
+    }))
+  }
+
+  // Reopen a completed block back to available
+  const handleReopenBlock = (blockId) => {
+    setSubjects(prev => prev.map(s => {
+      if (s.id !== activeSubject) return s
+      return {
+        ...s,
+        topics: s.topics.map(t => ({
+          ...t,
+          theoryBlocks: (t.theoryBlocks || []).map(b =>
+            b.id === blockId ? { ...b, status: 'available' } : b
+          )
+        }))
+      }
+    }))
+  }
+
   const openTopic = (topic, blockId = null) => {
     const state = getTopicStateFromLegacy(topic.status)
     if (!isAdmin && state === 'locked') return
@@ -960,6 +1350,19 @@ function StudyPage() {
       }
     }))
     setTimeout(() => checkAndUnlockBlocks(activeSubject), 0)
+    // Find topic and block names for the notification
+    const subject = subjects.find(s => s.id === activeSubject)
+    if (subject) {
+      for (const t of subject.topics) {
+        for (const b of (t.theoryBlocks || [])) {
+          const ex = (b.exercises || []).find(e => e.id === exerciseId)
+          if (ex) {
+            sendWhatsAppNotification(`Se ha subido una foto de resolucion en ${t.name} - ${b.title}`)
+            break
+          }
+        }
+      }
+    }
   }
 
   const handleSubmitForReview = (blockId) => {
@@ -996,12 +1399,13 @@ function StudyPage() {
       }
     }
 
-    // Store submissions in localStorage
-    const existing = loadSubmissions()
+    // Store submissions in Supabase
     const newSubmissions = exercisesToSubmit.filter(
-      sub => !existing.some(e => e.exerciseId === sub.exerciseId)
+      sub => !submissions.some(e => e.exerciseId === sub.exerciseId)
     )
-    saveSubmissions([...existing, ...newSubmissions])
+    const updatedSubmissions = [...submissions, ...newSubmissions]
+    setSubmissions(updatedSubmissions)
+    appStateDb.set('study_submissions', updatedSubmissions)
 
     setSubjects(subjects.map(s => {
       if (s.id !== activeSubject) return s
@@ -1022,7 +1426,7 @@ function StudyPage() {
       }
     }))
 
-    sendWhatsAppNotification(`Nuevos ejercicios para corregir: ${topicName} - ${blockTitle} (${exerciseCount} ejercicios)`)
+    sendWhatsAppNotification(`Hay algo nuevo para corregir en ${topicName} - ${blockTitle} (${exerciseCount} ejercicios enviados)`)
     setTimeout(() => checkAndUnlockBlocks(activeSubject), 0)
   }
 
@@ -1064,7 +1468,7 @@ function StudyPage() {
     const theoryBlocks = currentTopicData.theoryBlocks || []
 
     return (
-      <>
+      <div className="study-topic-view">
         {error && showError && (
           <div className="error-banner">
             <span>No se pudo conectar con el servidor. Usando datos locales.</span>
@@ -1085,15 +1489,35 @@ function StudyPage() {
               <div className="font-700 text-lg">{currentTopicData.name}</div>
               <div className="text-xs text-muted">{detail.name}</div>
             </div>
-            <TopicStateBadge
-              topic={currentTopicData}
-              subjectColor={detail.color}
-              isAdmin={isAdmin}
-              onClick={() => {
-                const idx = detail.topics.findIndex(t => t.name === currentTopicData.name && t.order === currentTopicData.order)
-                if (idx >= 0) cycleTopicState(detail.id, idx)
-              }}
-            />
+            {topicState === 'completed' ? (
+              <button
+                className="btn btn-sm border-none"
+                style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontSize: '0.7rem' }}
+                onClick={() => setConfirmAction({
+                  message: 'Reabrir este tema? Los bloques sin ejercicios completados se desbloquean.',
+                  onConfirm: () => {
+                    handleReopenTopic(detail.id, currentTopicData.name, currentTopicData.order)
+                    setConfirmAction(null)
+                  }
+                })}
+              >
+                <Unlock size={12} /> Reabrir
+              </button>
+            ) : topicState !== 'locked' ? (
+              <button
+                className="btn btn-sm border-none"
+                style={{ background: 'rgba(0,206,201,0.15)', color: 'var(--success)', fontSize: '0.7rem' }}
+                onClick={() => setConfirmAction({
+                  message: 'Dar por finalizado este tema sin completar todos los ejercicios?',
+                  onConfirm: () => {
+                    handleForceCompleteTopic(detail.id, currentTopicData.name, currentTopicData.order)
+                    setConfirmAction(null)
+                  }
+                })}
+              >
+                <CheckCircle size={12} /> Finalizar tema
+              </button>
+            ) : null}
           </div>
         </div>
 
@@ -1104,22 +1528,159 @@ function StudyPage() {
             </div>
           )}
 
-          {theoryBlocks.map(block => (
-            <TheoryBlockCard
-              key={block.id}
-              block={block}
-              subjectColor={detail.color}
-              isAdmin={isAdmin}
-              onExerciseAnswer={handleExerciseAnswer}
-              onPhotoUpload={handlePhotoUpload}
-              onSubmitForReview={handleSubmitForReview}
-              expandedBlockId={expandedBlockId}
-            />
-          ))}
+          <div className="study-topic-blocks">
+            {theoryBlocks.map(block => (
+              <TheoryBlockCard
+                key={block.id}
+                block={block}
+                subjectColor={detail.color}
+                isAdmin={isAdmin}
+                onExerciseAnswer={handleExerciseAnswer}
+                onPhotoUpload={handlePhotoUpload}
+                onSubmitForReview={handleSubmitForReview}
+                onForceUnlock={handleForceUnlock}
+                onForceComplete={(blockId) => setConfirmAction({
+                  message: 'Finalizar este bloque sin completar todos los ejercicios?',
+                  onConfirm: () => { handleForceCompleteBlock(blockId); setConfirmAction(null) }
+                })}
+                onReopen={(blockId) => setConfirmAction({
+                  message: 'Reabrir este bloque?',
+                  onConfirm: () => { handleReopenBlock(blockId); setConfirmAction(null) }
+                })}
+                expandedBlockId={expandedBlockId}
+                submissions={submissions}
+              />
+            ))}
+          </div>
+
+          {/* Additional material upload */}
+          <div style={{ padding: '12px 0', borderTop: '1px solid var(--border)', marginTop: 12 }}>
+            <div className="flex items-center justify-between mb-2">
+              <span className="font-700 text-xs text-muted text-uppercase tracking-wide">Material adicional</span>
+            </div>
+            <div className="flex gap-8">
+              <label className="btn btn-sm btn-outline flex-1" style={{ justifyContent: 'center', cursor: 'pointer' }}>
+                <Upload size={14} /> Subir PDF / Foto
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  style={{ display: 'none' }}
+                  onChange={async (e) => {
+                    const file = e.target.files[0]
+                    if (!file) return
+                    let url = null
+                    if (isSupabaseConfigured() && supabase) {
+                      const ext = file.name.split('.').pop()
+                      const path = `extra/${currentTopicData.name}/${Date.now()}.${ext}`
+                      const { error: uploadError } = await supabase.storage.from('uploads').upload(path, file)
+                      if (!uploadError) {
+                        const { data } = supabase.storage.from('uploads').getPublicUrl(path)
+                        url = data.publicUrl
+                      }
+                    }
+                    if (!url) url = URL.createObjectURL(file)
+                    // Store in topic's extraMaterials
+                    setSubjects(prev => prev.map(s => {
+                      if (s.id !== activeSubject) return s
+                      return {
+                        ...s,
+                        topics: s.topics.map(t => {
+                          if (t.name !== currentTopicData.name || t.order !== currentTopicData.order) return t
+                          const materials = t.extraMaterials || []
+                          return { ...t, extraMaterials: [...materials, { id: Date.now(), url, name: file.name, type: file.type, uploadDate: new Date().toISOString() }] }
+                        })
+                      }
+                    }))
+                    const isPdf = file.type === 'application/pdf' || file.name.endsWith('.pdf')
+                    sendWhatsAppNotification(
+                      isPdf
+                        ? `Nuevo PDF de ejercicios subido en ${currentTopicData.name}: ${file.name}`
+                        : `Nueva foto de ejercicios subida en ${currentTopicData.name}`
+                    )
+                  }}
+                />
+              </label>
+            </div>
+            {/* Show uploaded materials */}
+            {(currentTopicData.extraMaterials || []).length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                {(currentTopicData.extraMaterials || []).map(mat => (
+                  <div key={mat.id} className="flex items-center gap-8" style={{
+                    padding: '8px', marginBottom: 4, borderRadius: 8,
+                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                  }}>
+                    {mat.type?.startsWith('image/') ? (
+                      <Image size={14} style={{ color: detail.color, flexShrink: 0 }} />
+                    ) : (
+                      <Upload size={14} style={{ color: detail.color, flexShrink: 0 }} />
+                    )}
+                    <a href={mat.url} target="_blank" rel="noopener noreferrer" className="flex-1 text-xs" style={{ color: detail.color }}>
+                      {mat.name || 'Material'}
+                    </a>
+                    <span className="text-xs text-muted">
+                      {new Date(mat.uploadDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           <div style={{ height: 24 }} />
         </div>
-      </>
+
+        {confirmAction && (
+          <div className="modal-overlay" onClick={() => setConfirmAction(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>Confirmar</h2>
+              <p style={{ fontSize: '0.88rem', marginBottom: 16 }}>{confirmAction.message}</p>
+              <div className="flex gap-2">
+                <button className="btn btn-outline btn-block" onClick={() => setConfirmAction(null)}>Cancelar</button>
+                <button
+                  className="btn btn-block border-none"
+                  style={{ background: 'var(--primary)', color: 'white' }}
+                  onClick={confirmAction.onConfirm}
+                >
+                  Confirmar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {unlockPrompt && (
+          <div className="modal-overlay" onClick={() => setUnlockPrompt(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>Desbloquear</h2>
+              <p className="text-xs text-muted mb-3">
+                Introduce la contrasena para desbloquear.
+              </p>
+              <div className="form-group">
+                <input
+                  type="password"
+                  placeholder="Contrasena"
+                  value={unlockPassword}
+                  onChange={e => { setUnlockPassword(e.target.value); setUnlockError(false) }}
+                  onKeyDown={e => e.key === 'Enter' && tryUnlock()}
+                  autoFocus
+                  className={unlockError ? 'input-error' : ''}
+                />
+                {unlockError && <div className="error-text">Contrasena incorrecta</div>}
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button className="btn btn-outline btn-block" onClick={() => setUnlockPrompt(null)}>Cancelar</button>
+                <button
+                  className="btn btn-block border-none"
+                  style={{ background: '#f59e0b', color: 'white' }}
+                  onClick={tryUnlock}
+                >
+                  <Unlock size={14} /> Desbloquear
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     )
   }
 
@@ -1128,48 +1689,11 @@ function StudyPage() {
     const Icon = ICONS[detail.icon] || Calculator
     const currentTopic = getCurrentTopic(detail)
 
-    // Generate per-topic plans from theory blocks
-    const topicsWithBlocks = detail.topics.filter(t => (t.theoryBlocks || []).length > 0)
-    const planTopic = selectedPlanTopic
-      ? detail.topics.find(t => t.name === selectedPlanTopic)
-      : (topicsWithBlocks.length > 0 ? topicsWithBlocks[0] : null)
-    const topicPlan = planTopic ? generateTopicPlan(planTopic) : []
-    // Also include manually added tasks from the old weeklyPlan
-    const manualTasks = detail.weeklyPlan.filter(t => !t.blockId)
-
-    // Merge: topic plan (current week only, week 0) + manual tasks
-    const currentWeekPlan = topicPlan.filter(t => t.week === 0)
-    const allPlanTasks = [...currentWeekPlan, ...manualTasks]
-
-    const subTotal = allPlanTasks.length
-    const subDone = allPlanTasks.filter(t => {
-      if (t.autoComplete || t.done) return true
-      if (t.blockId && t.topic) {
-        const tp = detail.topics.find(tt => tt.name === t.topic)
-        if (tp) {
-          const block = (tp.theoryBlocks || []).find(b => b.id === t.blockId)
-          if (block && block.status === 'completed') return true
-        }
-      }
-      return false
-    }).length
+    // Plan-based progress for this subject
+    const subjectPlanEntries = plan.filter(e => e.subjectId === detail.id)
+    const subTotal = subjectPlanEntries.length
+    const subDone = subjectPlanEntries.filter(e => e.completed).length
     const subProgress = subTotal > 0 ? Math.round((subDone / subTotal) * 100) : 0
-
-    const tasksByDay = {}
-    allPlanTasks.forEach((task, i) => {
-      let autoComplete = task.autoComplete || false
-      if (task.blockId && task.topic) {
-        const tp = detail.topics.find(tt => tt.name === task.topic)
-        if (tp) {
-          const block = (tp.theoryBlocks || []).find(b => b.id === task.blockId)
-          autoComplete = block ? block.status === 'completed' : false
-        }
-      } else if (task.topic) {
-        autoComplete = isTopicExercisesComplete(detail, task.topic)
-      }
-      if (!tasksByDay[task.day]) tasksByDay[task.day] = []
-      tasksByDay[task.day].push({ ...task, originalIndex: i, autoComplete })
-    })
 
     return (
       <>
@@ -1205,11 +1729,11 @@ function StudyPage() {
             )}
           </div>
 
-          <div className="flex gap-10">
+          <div className="flex gap-10 study-stats-bar">
             <div className="flex-1 bg-card rounded-sm border" style={{ padding: '10px 12px' }}>
-              <div className="text-xs text-muted">Semana</div>
+              <div className="text-xs text-muted">Progreso</div>
               <div className="font-800" style={{ fontSize: '1.3rem', color: detail.color }}>{subProgress}%</div>
-              <div className="text-xs text-muted">{subDone}/{subTotal} tareas</div>
+              <div className="text-xs text-muted">{subDone}/{subTotal} bloques</div>
             </div>
             <div className="flex-1 bg-card rounded-sm border" style={{ padding: '10px 12px' }}>
               <div className="text-xs text-muted">Tema actual</div>
@@ -1221,6 +1745,40 @@ function StudyPage() {
               </div>
             </div>
           </div>
+
+          {/* Next block to study */}
+          {(() => {
+            const nextEntry = plan.find(e => !e.completed && e.subjectId === detail.id)
+            if (!nextEntry) return null
+            const isToday = nextEntry.date === formatDate(new Date())
+            const dayLabel = isToday ? 'Hoy' : new Date(nextEntry.date + 'T12:00:00').toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })
+            return (
+              <div style={{
+                margin: '8px 0 0',
+                padding: '8px 12px',
+                borderRadius: 8,
+                background: isToday ? `${detail.color}12` : 'var(--bg-card)',
+                border: isToday ? `1px solid ${detail.color}30` : '1px solid var(--border)',
+              }}>
+                <div className="flex items-center gap-8">
+                  <div style={{
+                    width: 6, height: 6, borderRadius: '50%',
+                    background: isToday ? detail.color : 'var(--text-muted)',
+                    flexShrink: 0,
+                  }} />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-xs font-700" style={{ color: isToday ? detail.color : 'var(--text-muted)' }}>
+                      {dayLabel}:
+                    </span>
+                    <span className="text-xs" style={{ marginLeft: 6 }}>
+                      {nextEntry.task}
+                    </span>
+                  </div>
+                  <span className="text-xs text-muted">{nextEntry.topicName}</span>
+                </div>
+              </div>
+            )
+          })()}
         </div>
 
         <div className="section-header">
@@ -1231,7 +1789,8 @@ function StudyPage() {
             const state = getTopicStateFromLegacy(topic.status)
             const config = TOPIC_STATE_CONFIG[state]
             const StateIcon = config.icon
-            const isClickable = isAdmin || (state !== 'locked')
+            const isLocked = state === 'locked'
+            const isClickable = isAdmin || !isLocked
             const hasContent = (topic.theoryBlocks || []).length > 0
 
             return (
@@ -1244,12 +1803,18 @@ function StudyPage() {
                 style={{
                   padding: '9px 0',
                   borderBottom: i < detail.topics.length - 1 ? '1px solid var(--border)' : 'none',
-                  opacity: state === 'locked' && !isAdmin ? 0.5 : 1,
+                  opacity: isLocked && !isAdmin ? 0.5 : 1,
                 }}
               >
                 <StateIcon
                   size={18}
-                  className="flex-shrink-0"
+                  className={`flex-shrink-0${isLocked ? ' cursor-pointer' : ''}`}
+                  onClick={isLocked ? (e) => {
+                    e.stopPropagation()
+                    setUnlockPrompt({ type: 'topic', subjectId: detail.id, topicIndex: i })
+                    setUnlockPassword('')
+                    setUnlockError(false)
+                  } : undefined}
                   style={{
                     color: state === 'completed' ? 'var(--success)'
                       : state === 'in_progress' ? detail.color
@@ -1265,12 +1830,30 @@ function StudyPage() {
                 }}>
                   {topic.name}
                 </span>
-                <TopicStateBadge
-                  topic={topic}
-                  subjectColor={detail.color}
-                  isAdmin={isAdmin}
-                  onClick={() => cycleTopicState(detail.id, i)}
-                />
+                {(topic.theoryBlocks || []).length > 0 && (() => {
+                  const total = (topic.theoryBlocks || []).length
+                  const completed = (topic.theoryBlocks || []).filter(b => b.status === 'completed').length
+                  if (total === 0) return null
+                  return (
+                    <div className="flex items-center gap-4 flex-shrink-0" style={{ marginRight: 8 }}>
+                      <div style={{ width: 40, height: 4, borderRadius: 2, background: 'var(--border)' }}>
+                        <div style={{ width: `${(completed / total) * 100}%`, height: '100%', borderRadius: 2, background: completed === total ? 'var(--success)' : detail.color, transition: 'width 0.3s' }} />
+                      </div>
+                      <span className="text-xs text-muted" style={{ fontSize: '0.6rem' }}>{completed}/{total}</span>
+                    </div>
+                  )
+                })()}
+                <span style={{
+                  fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase',
+                  padding: '3px 8px', borderRadius: 10,
+                  background: state === 'in_progress' ? `${detail.color}20`
+                    : state === 'completed' ? 'rgba(0,206,201,0.15)'
+                    : state === 'available' ? 'rgba(108,92,231,0.12)'
+                    : 'rgba(136,136,160,0.12)',
+                  color: state === 'in_progress' ? detail.color : config.color,
+                }}>
+                  {config.label}
+                </span>
               </div>
             )
           })}
@@ -1278,254 +1861,212 @@ function StudyPage() {
 
         <div className="section-header">
           <span className="section-title">Planning semanal</span>
-          {isAdmin && (
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost" onClick={() => { setPlanWeekOffset(prev => prev - 1); setSelectedPlanDate(null) }}>
+              <ChevronLeft size={16} />
+            </button>
             <button
               className="btn btn-sm border-none"
-              style={{ background: `${detail.color}20`, color: detail.color }}
-              onClick={() => { setNewTask({ day: 'Lunes', task: '', topic: '' }); clearErrors(); setModal('add-task') }}
+              style={{ background: 'var(--bg-input)', fontSize: '0.7rem', padding: '4px 8px' }}
+              onClick={() => { setPlanWeekOffset(0); setSelectedPlanDate(null) }}
             >
-              <Plus size={14} /> Tarea
+              Esta semana
             </button>
-          )}
-        </div>
-
-        {/* Topic selector tabs for per-topic plan */}
-        {topicsWithBlocks.length > 1 && (
-          <div className="px-16" style={{ paddingBottom: 8 }}>
-            <div className="flex gap-6 overflow-x-auto" style={{ paddingBottom: 4 }}>
-              {topicsWithBlocks.map(t => {
-                const isSelected = planTopic && planTopic.name === t.name
-                return (
-                  <button
-                    key={t.name}
-                    onClick={() => setSelectedPlanTopic(t.name)}
-                    className="btn btn-sm border-none flex-shrink-0"
-                    style={{
-                      background: isSelected ? `${detail.color}25` : 'var(--bg-input)',
-                      color: isSelected ? detail.color : 'var(--text-muted)',
-                      fontWeight: isSelected ? 700 : 500,
-                      fontSize: '0.72rem',
-                      padding: '5px 10px',
-                      borderRadius: 8,
-                    }}
-                  >
-                    {t.name}
-                  </button>
-                )
-              })}
-            </div>
+            <button className="btn-ghost" onClick={() => { setPlanWeekOffset(prev => prev + 1); setSelectedPlanDate(null) }}>
+              <ChevronRight size={16} />
+            </button>
           </div>
-        )}
+        </div>
 
         {/* Advance tracking badge */}
         {(() => {
-          const todayIdx = (new Date().getDay() + 6) % 7
-          let daysAhead = 0
-          DAYS.forEach((dayName, i) => {
-            if (i <= todayIdx) return
-            const dayTasks = tasksByDay[dayName] || []
-            const hasBlockTasks = dayTasks.some(t => t.blockId)
-            if (!hasBlockTasks) return
-            const allBlockTasksDone = dayTasks.filter(t => t.blockId).every(t => {
-              if (t.autoComplete || t.done) return true
-              const topic = detail.topics.find(tp => tp.name === t.topic)
-              if (!topic) return false
-              const block = (topic.theoryBlocks || []).find(b => b.id === t.blockId)
-              return block && block.status === 'completed'
-            })
-            if (allBlockTasksDone) daysAhead++
-          })
-          if (daysAhead <= 0) return null
+          const aheadCount = plan.filter(e => e.completed && e.isAhead).length
+          if (aheadCount <= 0) return null
           return (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', background: 'rgba(245, 158, 11, 0.1)', borderRadius: 8, margin: '0 16px 8px', color: '#f59e0b', fontSize: '0.8rem', fontWeight: 700 }}>
+            <div className="study-ahead-badge">
               <Zap size={14} />
-              +{daysAhead} {daysAhead === 1 ? 'dia' : 'dias'} adelantado
+              +{aheadCount} {aheadCount === 1 ? 'bloque' : 'bloques'} adelantado
             </div>
           )
         })()}
 
-        {/* Weekly calendar strip */}
+        {/* Date-based weekly calendar */}
         <div className="px-16" style={{ paddingBottom: 8 }}>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {(() => {
-              const now = new Date()
-              const mondayOffset = (now.getDay() + 6) % 7
-              const monday = new Date(now)
-              monday.setDate(now.getDate() - mondayOffset)
-              const SHORT_DAYS = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom']
-              return SHORT_DAYS.map((shortDay, i) => {
-                const d = new Date(monday)
-                d.setDate(monday.getDate() + i)
-                const isToday = i === mondayOffset
-                const dayName = DAYS[i]
-                const dayTasks = tasksByDay[dayName] || []
-                const allDone = dayTasks.length > 0 && dayTasks.every(t => t.autoComplete || t.done)
-                const hasTasks = dayTasks.length > 0
-                const someDone = dayTasks.some(t => t.autoComplete || t.done)
-                const isFuture = i > mondayOffset
-                const isFutureCompleted = isFuture && allDone && hasTasks
-
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      flex: 1,
-                      textAlign: 'center',
-                      padding: '6px 2px',
-                      borderRadius: 8,
-                      background: isFutureCompleted ? 'rgba(245, 158, 11, 0.12)' : isToday ? `${detail.color}18` : 'transparent',
-                      border: isFutureCompleted ? '2px solid rgba(245, 158, 11, 0.4)' : isToday ? `2px solid ${detail.color}40` : '2px solid transparent',
-                    }}
-                  >
-                    <div style={{
-                      fontSize: '0.6rem',
-                      fontWeight: 700,
-                      color: isFutureCompleted ? '#f59e0b' : isToday ? detail.color : 'var(--text-muted)',
-                      textTransform: 'uppercase',
-                      letterSpacing: '0.5px',
-                    }}>
-                      {shortDay}
-                    </div>
-                    <div style={{
-                      fontSize: '0.95rem',
-                      fontWeight: isFutureCompleted || isToday ? 800 : 500,
-                      color: isFutureCompleted ? '#f59e0b' : isToday ? detail.color : 'var(--text)',
-                      marginTop: 2,
-                    }}>
-                      {isFutureCompleted ? <Zap size={14} style={{ display: 'inline' }} /> : null}
-                      {d.getDate()}
-                    </div>
-                    {hasTasks && (
-                      <div style={{
-                        width: 6,
-                        height: 6,
-                        borderRadius: '50%',
-                        margin: '3px auto 0',
-                        background: isFutureCompleted ? '#f59e0b' : allDone ? 'var(--success)' : someDone ? 'var(--warning)' : `${detail.color}60`,
-                      }} />
-                    )}
-                  </div>
-                )
-              })
-            })()}
-          </div>
-
-          {/* Tasks for each day under the calendar */}
-          {DAYS.map((dayName, i) => {
-            const dayTasks = tasksByDay[dayName]
-            if (!dayTasks || dayTasks.length === 0) return null
+          {(() => {
             const now = new Date()
-            const mondayOffset = (now.getDay() + 6) % 7
-            const isToday = i === mondayOffset
+            const baseMonday = new Date(getWeekMonday(now) + 'T12:00:00')
+            baseMonday.setDate(baseMonday.getDate() + planWeekOffset * 7)
+            const weekStartStr = formatDate(baseMonday)
+            const weekPlan = getPlanForWeek(plan, weekStartStr)
+            const todayStr = formatDate(now)
+            const SHORT_DAYS = ['Lun', 'Mar', 'Mie', 'Jue', 'Vie', 'Sab', 'Dom']
+
+            // Group plan entries by date
+            const planByDate = {}
+            weekPlan.forEach(entry => {
+              if (!planByDate[entry.date]) planByDate[entry.date] = []
+              planByDate[entry.date].push(entry)
+            })
 
             return (
-              <div key={dayName} style={{ marginTop: i === DAYS.findIndex(d => tasksByDay[d]) ? 8 : 0 }}>
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '8px 0 4px',
-                }}>
-                  <span className="font-700 text-uppercase tracking-wide" style={{
-                    fontSize: '0.68rem',
-                    color: isToday ? detail.color : 'var(--text-muted)',
-                  }}>
-                    {dayName}
-                  </span>
-                  {isToday && (
-                    <span style={{
-                      fontSize: '0.55rem',
-                      fontWeight: 700,
-                      padding: '1px 6px',
-                      borderRadius: 6,
-                      background: `${detail.color}20`,
-                      color: detail.color,
-                      textTransform: 'uppercase',
-                    }}>
-                      Hoy
-                    </span>
-                  )}
-                </div>
-                {dayTasks.map(task => {
-                  const done = task.autoComplete || task.done
-                  const canToggle = isAdmin || !task.topic
-                  return (
-                    <div key={task.originalIndex} className="flex items-center gap-10" style={{
-                      padding: '8px 0',
-                      borderBottom: '1px solid var(--border)'
-                    }}>
+              <>
+                {/* Calendar strip */}
+                <div style={{ display: 'flex', gap: 4 }}>
+                  {SHORT_DAYS.map((shortDay, i) => {
+                    const d = new Date(baseMonday)
+                    d.setDate(baseMonday.getDate() + i)
+                    const dateStr = formatDate(d)
+                    const isToday = dateStr === todayStr
+                    const isSelected = selectedPlanDate === dateStr
+                    const dayEntries = planByDate[dateStr] || []
+                    const hasTasks = dayEntries.length > 0
+                    const allDone = hasTasks && dayEntries.every(e => e.completed)
+                    const someDone = dayEntries.some(e => e.completed)
+                    const hasAhead = dayEntries.some(e => e.isAhead)
+                    const isWeekend = i >= 5
+
+                    return (
                       <div
-                        className={`checkbox ${done ? 'checked' : ''}`}
-                        style={!done ? { borderColor: `${detail.color}60` } : task.autoComplete ? { background: 'var(--success)', borderColor: 'var(--success)' } : {}}
-                        onClick={canToggle ? () => toggleTask(detail.id, task.originalIndex) : undefined}
-                      >
-                        {done && <Check size={12} color="white" />}
-                      </div>
-                      <div
-                        className="flex-1 min-w-0"
-                        style={{ cursor: task.topic ? 'pointer' : 'default' }}
+                        key={i}
                         onClick={() => {
-                          if (task.topic) {
-                            const topic = detail.topics.find(t => t.name === task.topic)
-                            if (topic) openTopic(topic, task.blockId || null)
-                          }
+                          if (!hasTasks) return
+                          setSelectedPlanDate(prev => prev === dateStr ? null : dateStr)
+                        }}
+                        style={{
+                          flex: 1,
+                          textAlign: 'center',
+                          padding: '6px 2px',
+                          borderRadius: 8,
+                          cursor: hasTasks ? 'pointer' : 'default',
+                          background: isSelected ? `${detail.color}25`
+                            : hasAhead && allDone ? 'rgba(245, 158, 11, 0.12)'
+                            : isToday ? `${detail.color}18`
+                            : 'transparent',
+                          border: isSelected ? `2px solid ${detail.color}`
+                            : hasAhead && allDone ? '2px solid rgba(245, 158, 11, 0.4)'
+                            : isToday ? `2px solid ${detail.color}40`
+                            : '2px solid transparent',
+                          opacity: isWeekend && !hasTasks ? 0.3 : 1,
+                          transition: 'all 0.15s ease',
                         }}
                       >
-                        <span style={{
-                          fontSize: '0.85rem',
-                          textDecoration: done ? 'line-through' : 'none',
-                          color: done ? 'var(--text-muted)' : 'var(--text)'
+                        <div style={{
+                          fontSize: '0.6rem', fontWeight: 700,
+                          color: isSelected ? detail.color : hasAhead && allDone ? '#f59e0b' : isToday ? detail.color : 'var(--text-muted)',
+                          textTransform: 'uppercase', letterSpacing: '0.5px',
                         }}>
-                          {task.task}
+                          {shortDay}
+                        </div>
+                        <div style={{
+                          fontSize: '0.95rem',
+                          fontWeight: isSelected || isToday || (hasAhead && allDone) ? 800 : 500,
+                          color: isSelected ? detail.color : hasAhead && allDone ? '#f59e0b' : isToday ? detail.color : 'var(--text)',
+                          marginTop: 2,
+                        }}>
+                          {hasAhead && allDone && <Zap size={12} style={{ display: 'inline' }} />}
+                          {d.getDate()}
+                        </div>
+                        {hasTasks && (
+                          <div style={{
+                            width: 6, height: 6, borderRadius: '50%', margin: '3px auto 0',
+                            background: isSelected ? detail.color : hasAhead && allDone ? '#f59e0b' : allDone ? 'var(--success)' : someDone ? 'var(--warning)' : `${detail.color}60`,
+                          }} />
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Tasks grouped by date - filtered if a day is selected */}
+                {SHORT_DAYS.map((_, i) => {
+                  const d = new Date(baseMonday)
+                  d.setDate(baseMonday.getDate() + i)
+                  const dateStr = formatDate(d)
+                  // If a date is selected, only show that day
+                  if (selectedPlanDate && dateStr !== selectedPlanDate) return null
+                  const dayEntries = planByDate[dateStr] || []
+                  if (dayEntries.length === 0) return null
+                  const isToday = dateStr === todayStr
+                  const isSelected = selectedPlanDate === dateStr
+                  const dayLabel = d.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short' })
+
+                  return (
+                    <div key={dateStr} style={{ marginTop: 8 }}>
+                      <div className="flex items-center gap-6" style={{
+                        padding: '8px 0 4px',
+                        ...(isSelected ? { padding: '8px 10px 4px', background: `${detail.color}08`, borderRadius: 8, marginLeft: -10, marginRight: -10 } : {}),
+                      }}>
+                        <span className="font-700 text-uppercase tracking-wide" style={{
+                          fontSize: '0.68rem',
+                          color: isSelected || isToday ? detail.color : 'var(--text-muted)',
+                          textTransform: 'capitalize',
+                        }}>
+                          {dayLabel}
                         </span>
-                        {task.topic && (
+                        {isToday && (
                           <span style={{
-                            marginLeft: 8,
-                            padding: '1px 6px',
-                            borderRadius: 8,
-                            fontSize: '0.6rem',
-                            background: task.autoComplete ? 'rgba(0,206,201,0.15)' : `${detail.color}15`,
-                            color: task.autoComplete ? 'var(--success)' : `${detail.color}cc`
+                            fontSize: '0.55rem', fontWeight: 700, padding: '1px 6px', borderRadius: 6,
+                            background: `${detail.color}20`, color: detail.color, textTransform: 'uppercase',
                           }}>
-                            {task.topic}
+                            Hoy
                           </span>
                         )}
                       </div>
-                      {isAdmin && (
-                        <button
-                          className="btn-ghost muted opacity-40"
-                          onClick={() => handleDeleteTask(detail.id, task.originalIndex)}
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      )}
+                      {dayEntries.map(entry => {
+                        const done = entry.completed
+                        const topic = detail.topics.find(t => t.name === entry.topicName)
+                        return (
+                          <div key={entry.blockId} className="flex items-center gap-10" style={{
+                            padding: '8px 0', borderBottom: '1px solid var(--border)',
+                          }}>
+                            <div
+                              className={`checkbox ${done ? 'checked' : ''}`}
+                              style={done ? (entry.isAhead ? { background: '#f59e0b', borderColor: '#f59e0b' } : { background: 'var(--success)', borderColor: 'var(--success)' }) : { borderColor: `${detail.color}60` }}
+                            >
+                              {done && <Check size={12} color="white" />}
+                            </div>
+                            <div
+                              className="flex-1 min-w-0 cursor-pointer"
+                              onClick={() => {
+                                if (topic) openTopic(topic, entry.blockId)
+                              }}
+                            >
+                              <span style={{
+                                fontSize: '0.85rem',
+                                textDecoration: done ? 'line-through' : 'none',
+                                color: done ? 'var(--text-muted)' : 'var(--text)',
+                              }}>
+                                {entry.task}
+                              </span>
+                              <span style={{
+                                marginLeft: 8, padding: '1px 6px', borderRadius: 8, fontSize: '0.6rem',
+                                background: done ? (entry.isAhead ? 'rgba(245,158,11,0.15)' : 'rgba(0,206,201,0.15)') : `${detail.color}15`,
+                                color: done ? (entry.isAhead ? '#f59e0b' : 'var(--success)') : `${detail.color}cc`,
+                              }}>
+                                {entry.topicName}
+                              </span>
+                              {entry.completedDate && entry.completedDate !== entry.date && (
+                                <span className="text-xs" style={{ marginLeft: 6, color: '#f59e0b' }}>
+                                  (hecho el {new Date(entry.completedDate + 'T12:00:00').toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })})
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
                   )
                 })}
-              </div>
+
+                {weekPlan.length === 0 && (
+                  <div className="text-muted text-center" style={{ padding: '20px 0', fontSize: '0.82rem' }}>
+                    Sin tareas planificadas esta semana.
+                  </div>
+                )}
+              </>
             )
-          })}
+          })()}
         </div>
-
-        {allPlanTasks.length === 0 && (
-          <div className="text-muted text-center" style={{ padding: '30px 16px', fontSize: '0.85rem' }}>
-            Sin tareas. Anade temas con contenido para generar el planning.
-          </div>
-        )}
-
-        {/* Multi-week indicator */}
-        {topicPlan.length > 7 && (
-          <div className="px-16" style={{ paddingBottom: 8 }}>
-            <div className="text-xs text-muted text-center" style={{
-              padding: '6px 10px',
-              background: 'var(--bg-card)',
-              borderRadius: 8,
-              border: '1px solid var(--border)',
-            }}>
-              {planTopic?.name}: {topicPlan.length} bloques en {Math.ceil(topicPlan.length / 7)} semanas (mostrando semana 1)
-            </div>
-          </div>
-        )}
 
         {/* ========== ADMIN CORRECTIONS PANEL (Task 3) ========== */}
         {isAdmin && (
@@ -1534,9 +2075,10 @@ function StudyPage() {
               <button
                 className="flex items-center gap-2 cursor-pointer bg-none border-none"
                 style={{ color: 'var(--text-muted)', padding: 0 }}
-                onClick={() => {
+                onClick={async () => {
                   setShowCorrections(!showCorrections)
-                  setSubmissions(loadSubmissions())
+                  const savedSubs = await appStateDb.get('study_submissions')
+                  if (savedSubs) setSubmissions(savedSubs)
                 }}
               >
                 <ClipboardList size={14} />
@@ -1635,7 +2177,7 @@ function StudyPage() {
                                     : s
                                 )
                                 setSubmissions(updated)
-                                saveSubmissions(updated)
+                                appStateDb.set('study_submissions', updated)
                                 setFeedbackText('')
                               }}
                             >
@@ -1651,7 +2193,7 @@ function StudyPage() {
                                     : s
                                 )
                                 setSubmissions(updated)
-                                saveSubmissions(updated)
+                                appStateDb.set('study_submissions', updated)
                                 setFeedbackText('')
                               }}
                             >
@@ -1810,6 +2352,39 @@ function StudyPage() {
             </div>
           </div>
         )}
+
+        {unlockPrompt && (
+          <div className="modal-overlay" onClick={() => setUnlockPrompt(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>Desbloquear tema</h2>
+              <p className="text-xs text-muted mb-3">
+                Introduce la contrasena de admin para desbloquear este tema.
+              </p>
+              <div className="form-group">
+                <input
+                  type="password"
+                  placeholder="Contrasena"
+                  value={unlockPassword}
+                  onChange={e => { setUnlockPassword(e.target.value); setUnlockError(false) }}
+                  onKeyDown={e => e.key === 'Enter' && tryUnlock()}
+                  autoFocus
+                  className={unlockError ? 'input-error' : ''}
+                />
+                {unlockError && <div className="error-text">Contrasena incorrecta</div>}
+              </div>
+              <div className="flex gap-2 mt-3">
+                <button className="btn btn-outline btn-block" onClick={() => setUnlockPrompt(null)}>Cancelar</button>
+                <button
+                  className="btn btn-block border-none"
+                  style={{ background: '#f59e0b', color: 'white' }}
+                  onClick={tryUnlock}
+                >
+                  <Unlock size={14} /> Desbloquear
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </>
     )
   }
@@ -1859,25 +2434,44 @@ function StudyPage() {
         </div>
       </div>
 
+      {/* Global stats */}
+      <div className="flex gap-8 px-16" style={{ paddingBottom: 12 }}>
+        <div className="flex-1 bg-card rounded-sm border text-center" style={{ padding: '10px 8px' }}>
+          <div className="font-800" style={{ fontSize: '1.1rem', color: studyStreak >= 5 ? 'var(--success)' : studyStreak >= 3 ? 'var(--warning)' : 'var(--text)' }}>
+            {studyStreak}
+          </div>
+          <div className="text-xs text-muted">Racha (dias)</div>
+        </div>
+        <div className="flex-1 bg-card rounded-sm border text-center" style={{ padding: '10px 8px' }}>
+          <div className="font-800" style={{ fontSize: '1.1rem' }}>
+            {plan.filter(e => e.completed).length}/{plan.length}
+          </div>
+          <div className="text-xs text-muted">Bloques hechos</div>
+        </div>
+        <div className="flex-1 bg-card rounded-sm border text-center" style={{ padding: '10px 8px' }}>
+          <div className="font-800" style={{ fontSize: '1.1rem', color: 'var(--primary)' }}>
+            {(() => {
+              const incomplete = plan.filter(e => !e.completed)
+              if (incomplete.length === 0) return 'Hecho'
+              const lastDate = incomplete[incomplete.length - 1].date
+              const d = new Date(lastDate + 'T12:00:00')
+              return d.toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })
+            })()}
+          </div>
+          <div className="text-xs text-muted">Fin estimado</div>
+        </div>
+      </div>
+
+      <div className="study-summary-grid">
       {subjects.map(subject => {
         const Icon = ICONS[subject.icon] || Calculator
-        const progress = getSubjectProgress(subject)
+        const subjectEntries = plan.filter(e => e.subjectId === subject.id)
+        const subTotal = subjectEntries.length
+        const subDone = subjectEntries.filter(e => e.completed).length
+        const progress = subTotal > 0 ? Math.round((subDone / subTotal) * 100) : 0
         const current = getCurrentTopic(subject)
         const next = getNextTopic(subject)
         const doneTops = getCompletedTopics(subject)
-        const subjectAllTasks = getSubjectAllTasks(subject)
-        const subTotal = subjectAllTasks.length
-        const subDone = subjectAllTasks.filter(t => {
-          if (t.autoComplete || t.done) return true
-          if (t.blockId && t.topic) {
-            const tp = subject.topics.find(tt => tt.name === t.topic)
-            if (tp) {
-              const block = (tp.theoryBlocks || []).find(b => b.id === t.blockId)
-              if (block && block.status === 'completed') return true
-            }
-          }
-          return isTaskDone(t, subject)
-        }).length
 
         return (
           <div
@@ -1957,25 +2551,26 @@ function StudyPage() {
           </div>
         )
       })}
+      </div>
 
-      {todayTasks.length > 0 && (
+      {todayPlanEntries.length > 0 && (
         <>
           <div className="section-header">
-            <span className="section-title">Hoy - {todayName}</span>
+            <span className="section-title">Hoy - {new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'short' })}</span>
           </div>
-          <div className="card">
-            {todayTasks.map((task, i) => {
-              const done = task.autoComplete || task.done
-              const canToggle = isAdmin || !task.topic
+          <div className="card" style={{ borderLeft: `3px solid var(--primary)` }}>
+            {todayPlanEntries.map((entry, i) => {
+              const done = entry.completed
+              const subject = subjects.find(s => s.id === entry.subjectId)
+              const subjectColor = subject?.color || 'var(--primary)'
               return (
                 <div key={i} className="flex items-center gap-10" style={{
                   padding: '8px 0',
-                  borderBottom: i < todayTasks.length - 1 ? '1px solid var(--border)' : 'none'
+                  borderBottom: i < todayPlanEntries.length - 1 ? '1px solid var(--border)' : 'none'
                 }}>
                   <div
                     className={`checkbox ${done ? 'checked' : ''}`}
-                    style={!done ? { borderColor: `${task.subjectColor}60` } : task.autoComplete ? { background: 'var(--success)', borderColor: 'var(--success)' } : {}}
-                    onClick={canToggle ? () => toggleTask(task.subjectId, task.taskIndex) : undefined}
+                    style={done ? { background: 'var(--success)', borderColor: 'var(--success)' } : { borderColor: `${subjectColor}60` }}
                   >
                     {done && <Check size={12} color="white" />}
                   </div>
@@ -1985,18 +2580,23 @@ function StudyPage() {
                       textDecoration: done ? 'line-through' : 'none',
                       color: done ? 'var(--text-muted)' : 'var(--text)'
                     }}>
-                      {task.task}
+                      {entry.task}
                     </span>
                   </div>
                   <span className="font-700" style={{
                     padding: '2px 8px', borderRadius: 10, fontSize: '0.6rem',
-                    background: `${task.subjectColor}18`, color: task.subjectColor
+                    background: `${subjectColor}18`, color: subjectColor
                   }}>
-                    {task.subjectName.substring(0, 4)}
+                    {entry.topicName?.substring(0, 6)}
                   </span>
                 </div>
               )
             })}
+            {todayPlanEntries.every(e => e.completed) && (
+              <div className="text-center mt-2" style={{ padding: '8px 0', color: 'var(--success)', fontSize: '0.82rem', fontWeight: 700 }}>
+                Todo completado hoy
+              </div>
+            )}
           </div>
         </>
       )}
