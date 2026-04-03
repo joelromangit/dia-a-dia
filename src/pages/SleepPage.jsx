@@ -10,6 +10,25 @@ import { sleepDb } from '../lib/db'
 const DAY_LABELS = ['L', 'M', 'X', 'J', 'V', 'S', 'D']
 const DAY_NAMES = ['Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo']
 
+function registerSW() {
+  if ('serviceWorker' in navigator) {
+    return navigator.serviceWorker.register('/sw.js')
+  }
+  return Promise.resolve(null)
+}
+
+function sendSWMessage(msg) {
+  if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+    navigator.serviceWorker.controller.postMessage(msg)
+  }
+}
+
+function requestNotificationPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission()
+  }
+}
+
 function calcHours(bedtime, wakeup) {
   const [bh, bm] = bedtime.split(':').map(Number)
   const [wh, wm] = wakeup.split(':').map(Number)
@@ -164,6 +183,53 @@ function SleepPage() {
     if (error) setShowError(true)
   }, [error])
 
+  // Register SW and listen for WAKE_UP from notification action
+  useEffect(() => {
+    registerSW()
+    requestNotificationPermission()
+
+    const handleSWMessage = (event) => {
+      if (event.data && event.data.type === 'WAKE_UP') {
+        wakeUpRef.current()
+      }
+    }
+    navigator.serviceWorker?.addEventListener('message', handleSWMessage)
+    return () => navigator.serviceWorker?.removeEventListener('message', handleSWMessage)
+  }, [])
+
+  // Re-schedule alarm on mount/reload if there's an active sleep session
+  useEffect(() => {
+    if (sleeping && startTime && !loadingSchedules) {
+      const sched = getScheduleForDate(todayStr, schedules)
+      const goalH = sched ? calcHours(sched.bedtime, sched.wakeup) : 8
+      const goalMs = goalH * 60 * 60 * 1000
+      sendSWMessage({ type: 'START_SLEEP_ALARM', goalMs, startTime })
+    }
+  }, [loadingSchedules])
+
+  // Keep a ref to the wake-up function so the SW message handler can call it
+  const wakeUpRef = useRef(null)
+  wakeUpRef.current = () => {
+    if (!sleeping || !startTime) return
+    setSleeping(false)
+    clearInterval(intervalRef.current)
+    const now = new Date()
+    const bedtime = new Date(startTime)
+    const record = {
+      id: Date.now(),
+      date: now.toISOString().split('T')[0],
+      bedtime: `${String(bedtime.getHours()).padStart(2, '0')}:${String(bedtime.getMinutes()).padStart(2, '0')}`,
+      wakeup: `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
+    }
+    setRecords(prev => [record, ...prev])
+    sleepDb.addRecord(record)
+    setElapsed(0)
+    setStartTime(null)
+    localStorage.removeItem('sleep_active')
+    localStorage.removeItem('sleep_start')
+    sendSWMessage({ type: 'CANCEL_SLEEP_ALARM' })
+  }
+
   const closeModal = () => {
     setModal(null)
     setScheduleForm(null)
@@ -186,6 +252,10 @@ function SleepPage() {
       setElapsed(0)
       localStorage.setItem('sleep_active', 'true')
       localStorage.setItem('sleep_start', String(now))
+      // Schedule notification alarm based on sleep goal
+      const goalH = getGoalHoursForDate(todayStr)
+      const goalMs = goalH * 60 * 60 * 1000
+      sendSWMessage({ type: 'START_SLEEP_ALARM', goalMs, startTime: now })
     } else {
       setSleeping(false)
       clearInterval(intervalRef.current)
@@ -203,6 +273,7 @@ function SleepPage() {
       setStartTime(null)
       localStorage.removeItem('sleep_active')
       localStorage.removeItem('sleep_start')
+      sendSWMessage({ type: 'CANCEL_SLEEP_ALARM' })
     }
   }
 
@@ -213,6 +284,7 @@ function SleepPage() {
     setStartTime(null)
     localStorage.removeItem('sleep_active')
     localStorage.removeItem('sleep_start')
+    sendSWMessage({ type: 'CANCEL_SLEEP_ALARM' })
   }
 
   const handleManualAdd = () => {
