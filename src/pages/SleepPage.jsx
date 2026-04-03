@@ -111,9 +111,21 @@ function validateScheduleForm(form) {
 function SleepPage() {
   const [records, setRecords, { loading: loadingRecords, error: errorRecords }] = useDb(sleepDb.getRecords, mockSleep.records)
   const [schedules, setSchedules, { loading: loadingSchedules, error: errorSchedules }] = useDb(sleepDb.getSchedules, mockSleep.schedules)
-  const [sleeping, setSleeping] = useState(false)
-  const [startTime, setStartTime] = useState(null)
-  const [elapsed, setElapsed] = useState(0)
+  const [sleeping, setSleeping] = useState(() => {
+    const saved = localStorage.getItem('sleep_active')
+    return saved === 'true'
+  })
+  const [startTime, setStartTime] = useState(() => {
+    const saved = localStorage.getItem('sleep_start')
+    return saved ? Number(saved) : null
+  })
+  const [elapsed, setElapsed] = useState(() => {
+    const saved = localStorage.getItem('sleep_start')
+    if (saved && localStorage.getItem('sleep_active') === 'true') {
+      return Math.floor((Date.now() - Number(saved)) / 1000)
+    }
+    return 0
+  })
   const [modal, setModal] = useState(null)
   const [selectedDate, setSelectedDate] = useState(null)
   const [manualForm, setManualForm] = useState({ date: '', bedtime: '23:00', wakeup: '07:00' })
@@ -168,9 +180,12 @@ function SleepPage() {
 
   const handleSleepToggle = () => {
     if (!sleeping) {
+      const now = Date.now()
       setSleeping(true)
-      setStartTime(Date.now())
+      setStartTime(now)
       setElapsed(0)
+      localStorage.setItem('sleep_active', 'true')
+      localStorage.setItem('sleep_start', String(now))
     } else {
       setSleeping(false)
       clearInterval(intervalRef.current)
@@ -186,6 +201,8 @@ function SleepPage() {
       sleepDb.addRecord(record)
       setElapsed(0)
       setStartTime(null)
+      localStorage.removeItem('sleep_active')
+      localStorage.removeItem('sleep_start')
     }
   }
 
@@ -194,6 +211,8 @@ function SleepPage() {
     clearInterval(intervalRef.current)
     setElapsed(0)
     setStartTime(null)
+    localStorage.removeItem('sleep_active')
+    localStorage.removeItem('sleep_start')
   }
 
   const handleManualAdd = () => {
