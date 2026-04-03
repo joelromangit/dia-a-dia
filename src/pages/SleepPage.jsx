@@ -383,7 +383,6 @@ function SleepPage() {
   const manualFormHasErrors = Object.keys(formErrors).length > 0
   const isManualFormInvalid = !manualForm.date?.trim() || !manualForm.bedtime?.trim() || !manualForm.wakeup?.trim()
   const isEditFormInvalid = !editForm?.date?.trim() || !editForm?.bedtime?.trim() || !editForm?.wakeup?.trim()
-  const isScheduleFormInvalid = !scheduleForm?.name?.trim() || !scheduleForm?.days?.length || !scheduleForm?.wakeup?.trim() || !scheduleForm?.cycles
 
   if (loading) {
     return (
@@ -1140,7 +1139,7 @@ function SleepPage() {
                   setScheduleForm({ ...scheduleForm, name: e.target.value })
                   setFormErrors(prev => { const { name, ...rest } = prev; return rest })
                 }}
-                placeholder="Ej: Entre semana" autoFocus />
+                placeholder="Ej: Entre semana" />
               {formErrors.name && <div className="error-text">{formErrors.name}</div>}
             </div>
             <div className="form-group">
@@ -1230,7 +1229,7 @@ function SleepPage() {
             )}
             <div className="flex gap-2">
               <button className="btn btn-outline btn-block" onClick={() => { setScheduleForm(null); setFormErrors({}) }}>Volver</button>
-              <button className="btn btn-primary btn-block" disabled={isScheduleFormInvalid} onClick={handleSaveSchedule}>Guardar</button>
+              <button className="btn btn-primary btn-block" onClick={handleSaveSchedule}>Guardar</button>
             </div>
           </div>
         </div>
