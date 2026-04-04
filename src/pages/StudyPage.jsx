@@ -758,12 +758,17 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
               <div className="font-700 text-uppercase tracking-wide text-muted" style={{ fontSize: '0.68rem', marginBottom: 8 }}>
                 Ejercicios
               </div>
-              {allExercises.map((ex, i) => (
+              {allExercises.map((ex, i) => {
+                const exSubs = submissions.filter(s => s.exerciseId === ex.id)
+                const latestSub = exSubs.length > 0 ? exSubs[exSubs.length - 1] : null
+                return (
                 <div key={ex.id} style={{ borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
                   <div className="flex items-center gap-2" style={{ paddingTop: i > 0 ? 8 : 0 }}>
                     <span className="text-xs text-muted font-600">{i + 1}.</span>
+                    {ex.status === 'submitted' && latestSub?.status === 'approved' && <span className="badge badge-success" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Corregido</span>}
+                    {ex.status === 'submitted' && latestSub?.status === 'rejected' && <span className="badge" style={{ fontSize: '0.6rem', padding: '1px 6px', background: 'rgba(255,118,117,0.15)', color: 'var(--danger)' }}>Rechazado</span>}
+                    {ex.status === 'submitted' && (!latestSub || latestSub.status === 'pending') && <span className="badge" style={{ fontSize: '0.6rem', padding: '1px 6px', background: 'rgba(108,92,231,0.12)', color: 'var(--primary-light)' }}>Por corregir</span>}
                     {ex.status === 'done' && <span className="badge badge-success" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Hecho</span>}
-                    {ex.status === 'submitted' && <span className="badge badge-primary" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Enviado</span>}
                     {ex.status === 'pending' && <span className="badge" style={{ fontSize: '0.6rem', padding: '1px 6px', background: 'rgba(136,136,160,0.12)', color: 'var(--text-muted)' }}>Pendiente</span>}
                   </div>
                   {ex.type === 'auto' && ex.autoConfig?.type === 'multiple_choice' && (
@@ -776,7 +781,7 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
                     <ManualExercise exercise={ex} onPhotoUpload={onPhotoUpload} onRetryUpload={onRetryUpload} submissions={submissions} />
                   )}
                 </div>
-              ))}
+              )})}
 
               {allDone && !allSubmitted && (
                 <button
