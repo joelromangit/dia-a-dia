@@ -960,7 +960,7 @@ function StudyPage() {
   const [editForm, setEditForm] = useState(null)
   const [showError, setShowError] = useState(true)
   const [selectedPlanTopic, setSelectedPlanTopic] = useState(null)
-  const [showCorrections, setShowCorrections] = useState(false)
+  const [showCorrections, setShowCorrections] = useState(true)
   const [submissions, setSubmissions] = useState([])
   const [feedbackText, setFeedbackText] = useState('')
   const [correctionFile, setCorrectionFile] = useState(null)
@@ -2089,6 +2089,202 @@ function StudyPage() {
           })()}
         </div>
 
+        {/* ========== ADMIN CORRECTIONS PANEL ========== */}
+        {isAdmin && (
+          <>
+            <div className="section-header">
+              <button
+                className="flex items-center gap-2 cursor-pointer bg-none border-none"
+                style={{ color: 'var(--text-muted)', padding: 0 }}
+                onClick={async () => {
+                  setShowCorrections(!showCorrections)
+                  const savedSubs = await appStateDb.get('study_submissions')
+                  if (savedSubs) setSubmissions(savedSubs)
+                }}
+              >
+                <ClipboardList size={14} />
+                <span className="section-title">Correcciones</span>
+                <span className="badge badge-primary" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>
+                  {submissions.filter(s => s.status === 'pending' && s.subjectName === detail.name).length}
+                </span>
+                {showCorrections ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </button>
+            </div>
+
+            {showCorrections && (
+              <div className="px-16" style={{ paddingBottom: 12 }}>
+                {submissions.filter(s => s.subjectName === detail.name).length === 0 && (
+                  <div className="text-muted text-center" style={{ padding: '20px 0', fontSize: '0.82rem' }}>
+                    Sin ejercicios enviados para corregir.
+                  </div>
+                )}
+                {submissions
+                  .filter(s => s.subjectName === detail.name)
+                  .sort((a, b) => {
+                    const order = { pending: 0, approved: 1, rejected: 1 }
+                    return (order[a.status] || 0) - (order[b.status] || 0)
+                  })
+                  .map((sub, idx) => (
+                    <div
+                      key={sub.exerciseId + '-' + idx}
+                      style={{
+                        padding: '12px',
+                        marginBottom: 8,
+                        borderRadius: 'var(--radius-sm)',
+                        background: 'var(--bg-card)',
+                        border: sub.status === 'pending'
+                          ? '1px solid var(--warning)'
+                          : sub.status === 'approved'
+                            ? '1px solid rgba(0,206,201,0.3)'
+                            : sub.status === 'rejected'
+                              ? '1px solid rgba(255,118,117,0.3)'
+                              : '1px solid var(--border)',
+                      }}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div>
+                          <span className="text-xs text-muted font-600">{sub.topicName}</span>
+                          <span className="text-xs text-muted"> / {sub.blockTitle}</span>
+                        </div>
+                        <span className={`badge ${sub.status === 'pending' ? 'badge-warning' : sub.status === 'approved' ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '0.6rem', padding: '1px 6px' }}>
+                          {sub.status === 'pending' ? 'Pendiente' : sub.status === 'approved' ? 'Aprobado' : 'Rechazado'}
+                        </span>
+                      </div>
+                      <div className="text-0\.82 mb-2"><MathText text={sub.question} /></div>
+                      {sub.photoUrl && (
+                        <div style={{ marginBottom: 8 }}>
+                          <img
+                            src={sub.photoUrl}
+                            alt="Respuesta"
+                            style={{ maxWidth: '100%', maxHeight: 150, borderRadius: 8, border: '1px solid var(--border)' }}
+                          />
+                        </div>
+                      )}
+                      {sub.answer && !sub.photoUrl && (
+                        <div className="text-xs text-muted mb-2">Respuesta: {sub.answer}</div>
+                      )}
+                      <div className="text-xs text-muted mb-2">
+                        {new Date(sub.timestamp).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </div>
+                      {sub.feedback && (
+                        <div className="text-xs mb-2" style={{
+                          padding: '6px 8px',
+                          borderRadius: 6,
+                          background: sub.status === 'approved' ? 'rgba(0,206,201,0.08)' : 'rgba(255,118,117,0.08)',
+                          color: sub.status === 'approved' ? 'var(--success)' : 'var(--danger)',
+                        }}>
+                          <MessageSquare size={10} style={{ display: 'inline', marginRight: 4 }} />
+                          {sub.feedback}
+                        </div>
+                      )}
+                      {sub.correctionUrl && (
+                        <div style={{ marginBottom: 8 }}>
+                          <div className="text-xs text-muted mb-1" style={{ fontWeight: 600 }}>Correccion:</div>
+                          <img
+                            src={sub.correctionUrl}
+                            alt="Correccion"
+                            style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, border: '1px solid var(--danger)' }}
+                          />
+                        </div>
+                      )}
+                      {sub.status === 'pending' && (
+                        <div>
+                          <div className="flex gap-6 mb-2">
+                            <input
+                              value={feedbackText}
+                              onChange={e => setFeedbackText(e.target.value)}
+                              placeholder="Comentario (opcional)"
+                              style={{ fontSize: '0.78rem', padding: '6px 8px' }}
+                            />
+                          </div>
+                          <div className="flex gap-6 mb-2">
+                            <input
+                              ref={correctionFileRef}
+                              type="file"
+                              accept="image/*"
+                              style={{ display: 'none' }}
+                              onChange={e => {
+                                const file = e.target.files?.[0]
+                                if (file) {
+                                  setCorrectionFile(file)
+                                  setCorrectionPreview(URL.createObjectURL(file))
+                                }
+                              }}
+                            />
+                            <button
+                              className="btn btn-sm btn-outline flex-1"
+                              style={{ justifyContent: 'center', fontSize: '0.72rem' }}
+                              onClick={() => correctionFileRef.current?.click()}
+                            >
+                              <Upload size={12} /> {correctionFile ? 'Foto subida' : 'Subir correccion'}
+                            </button>
+                          </div>
+                          {correctionPreview && (
+                            <div style={{ marginBottom: 8 }}>
+                              <img
+                                src={correctionPreview}
+                                alt="Preview correccion"
+                                style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid var(--border)' }}
+                              />
+                            </div>
+                          )}
+                          <div className="flex gap-6">
+                            <button
+                              className="btn btn-sm flex-1"
+                              style={{ background: 'rgba(0,206,201,0.15)', color: 'var(--success)', border: 'none', justifyContent: 'center' }}
+                              onClick={() => {
+                                const updated = submissions.map(s =>
+                                  s.exerciseId === sub.exerciseId && s.timestamp === sub.timestamp
+                                    ? { ...s, status: 'approved', feedback: feedbackText }
+                                    : s
+                                )
+                                setSubmissions(updated)
+                                appStateDb.set('study_submissions', updated)
+                                setFeedbackText('')
+                                setCorrectionFile(null)
+                                setCorrectionPreview(null)
+                              }}
+                            >
+                              <ThumbsUp size={12} /> Aprobar
+                            </button>
+                            <button
+                              className="btn btn-sm flex-1"
+                              style={{ background: 'rgba(255,118,117,0.15)', color: 'var(--danger)', border: 'none', justifyContent: 'center' }}
+                              onClick={async () => {
+                                let correctionUrl = correctionPreview
+                                if (correctionFile && isSupabaseConfigured() && supabase) {
+                                  const ext = correctionFile.name.split('.').pop()
+                                  const path = `corrections/${Date.now()}.${ext}`
+                                  const { error: upErr } = await supabase.storage.from('uploads').upload(path, correctionFile)
+                                  if (!upErr) {
+                                    const { data } = supabase.storage.from('uploads').getPublicUrl(path)
+                                    correctionUrl = data.publicUrl
+                                  }
+                                }
+                                const updated = submissions.map(s =>
+                                  s.exerciseId === sub.exerciseId && s.timestamp === sub.timestamp
+                                    ? { ...s, status: 'rejected', feedback: feedbackText, correctionUrl: correctionUrl || null }
+                                    : s
+                                )
+                                setSubmissions(updated)
+                                appStateDb.set('study_submissions', updated)
+                                setFeedbackText('')
+                                setCorrectionFile(null)
+                                setCorrectionPreview(null)
+                              }}
+                            >
+                              <ThumbsDown size={12} /> Rechazar
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            )}
+          </>
+        )}
+
         <div className="section-header">
           <span className="section-title">Temario</span>
         </div>
@@ -2410,202 +2606,6 @@ function StudyPage() {
             )
           })()}
         </div>
-
-        {/* ========== ADMIN CORRECTIONS PANEL (Task 3) ========== */}
-        {isAdmin && (
-          <>
-            <div className="section-header">
-              <button
-                className="flex items-center gap-2 cursor-pointer bg-none border-none"
-                style={{ color: 'var(--text-muted)', padding: 0 }}
-                onClick={async () => {
-                  setShowCorrections(!showCorrections)
-                  const savedSubs = await appStateDb.get('study_submissions')
-                  if (savedSubs) setSubmissions(savedSubs)
-                }}
-              >
-                <ClipboardList size={14} />
-                <span className="section-title">Correcciones</span>
-                <span className="badge badge-primary" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>
-                  {submissions.filter(s => s.status === 'pending' && s.subjectName === detail.name).length}
-                </span>
-                {showCorrections ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-              </button>
-            </div>
-
-            {showCorrections && (
-              <div className="px-16" style={{ paddingBottom: 12 }}>
-                {submissions.filter(s => s.subjectName === detail.name).length === 0 && (
-                  <div className="text-muted text-center" style={{ padding: '20px 0', fontSize: '0.82rem' }}>
-                    Sin ejercicios enviados para corregir.
-                  </div>
-                )}
-                {submissions
-                  .filter(s => s.subjectName === detail.name)
-                  .sort((a, b) => {
-                    const order = { pending: 0, approved: 1, rejected: 1 }
-                    return (order[a.status] || 0) - (order[b.status] || 0)
-                  })
-                  .map((sub, idx) => (
-                    <div
-                      key={sub.exerciseId + '-' + idx}
-                      style={{
-                        padding: '12px',
-                        marginBottom: 8,
-                        borderRadius: 'var(--radius-sm)',
-                        background: 'var(--bg-card)',
-                        border: sub.status === 'pending'
-                          ? '1px solid var(--warning)'
-                          : sub.status === 'approved'
-                            ? '1px solid rgba(0,206,201,0.3)'
-                            : sub.status === 'rejected'
-                              ? '1px solid rgba(255,118,117,0.3)'
-                              : '1px solid var(--border)',
-                      }}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div>
-                          <span className="text-xs text-muted font-600">{sub.topicName}</span>
-                          <span className="text-xs text-muted"> / {sub.blockTitle}</span>
-                        </div>
-                        <span className={`badge ${sub.status === 'pending' ? 'badge-warning' : sub.status === 'approved' ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '0.6rem', padding: '1px 6px' }}>
-                          {sub.status === 'pending' ? 'Pendiente' : sub.status === 'approved' ? 'Aprobado' : 'Rechazado'}
-                        </span>
-                      </div>
-                      <div className="text-0\.82 mb-2"><MathText text={sub.question} /></div>
-                      {sub.photoUrl && (
-                        <div style={{ marginBottom: 8 }}>
-                          <img
-                            src={sub.photoUrl}
-                            alt="Respuesta"
-                            style={{ maxWidth: '100%', maxHeight: 150, borderRadius: 8, border: '1px solid var(--border)' }}
-                          />
-                        </div>
-                      )}
-                      {sub.answer && !sub.photoUrl && (
-                        <div className="text-xs text-muted mb-2">Respuesta: {sub.answer}</div>
-                      )}
-                      <div className="text-xs text-muted mb-2">
-                        {new Date(sub.timestamp).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                      </div>
-                      {sub.feedback && (
-                        <div className="text-xs mb-2" style={{
-                          padding: '6px 8px',
-                          borderRadius: 6,
-                          background: sub.status === 'approved' ? 'rgba(0,206,201,0.08)' : 'rgba(255,118,117,0.08)',
-                          color: sub.status === 'approved' ? 'var(--success)' : 'var(--danger)',
-                        }}>
-                          <MessageSquare size={10} style={{ display: 'inline', marginRight: 4 }} />
-                          {sub.feedback}
-                        </div>
-                      )}
-                      {sub.correctionUrl && (
-                        <div style={{ marginBottom: 8 }}>
-                          <div className="text-xs text-muted mb-1" style={{ fontWeight: 600 }}>Correccion:</div>
-                          <img
-                            src={sub.correctionUrl}
-                            alt="Correccion"
-                            style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, border: '1px solid var(--danger)' }}
-                          />
-                        </div>
-                      )}
-                      {sub.status === 'pending' && (
-                        <div>
-                          <div className="flex gap-6 mb-2">
-                            <input
-                              value={feedbackText}
-                              onChange={e => setFeedbackText(e.target.value)}
-                              placeholder="Comentario (opcional)"
-                              style={{ fontSize: '0.78rem', padding: '6px 8px' }}
-                            />
-                          </div>
-                          <div className="flex gap-6 mb-2">
-                            <input
-                              ref={correctionFileRef}
-                              type="file"
-                              accept="image/*"
-                              style={{ display: 'none' }}
-                              onChange={e => {
-                                const file = e.target.files?.[0]
-                                if (file) {
-                                  setCorrectionFile(file)
-                                  setCorrectionPreview(URL.createObjectURL(file))
-                                }
-                              }}
-                            />
-                            <button
-                              className="btn btn-sm btn-outline flex-1"
-                              style={{ justifyContent: 'center', fontSize: '0.72rem' }}
-                              onClick={() => correctionFileRef.current?.click()}
-                            >
-                              <Upload size={12} /> {correctionFile ? 'Foto subida' : 'Subir correccion'}
-                            </button>
-                          </div>
-                          {correctionPreview && (
-                            <div style={{ marginBottom: 8 }}>
-                              <img
-                                src={correctionPreview}
-                                alt="Preview correccion"
-                                style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid var(--border)' }}
-                              />
-                            </div>
-                          )}
-                          <div className="flex gap-6">
-                            <button
-                              className="btn btn-sm flex-1"
-                              style={{ background: 'rgba(0,206,201,0.15)', color: 'var(--success)', border: 'none', justifyContent: 'center' }}
-                              onClick={() => {
-                                const updated = submissions.map(s =>
-                                  s.exerciseId === sub.exerciseId && s.timestamp === sub.timestamp
-                                    ? { ...s, status: 'approved', feedback: feedbackText }
-                                    : s
-                                )
-                                setSubmissions(updated)
-                                appStateDb.set('study_submissions', updated)
-                                setFeedbackText('')
-                                setCorrectionFile(null)
-                                setCorrectionPreview(null)
-                              }}
-                            >
-                              <ThumbsUp size={12} /> Aprobar
-                            </button>
-                            <button
-                              className="btn btn-sm flex-1"
-                              style={{ background: 'rgba(255,118,117,0.15)', color: 'var(--danger)', border: 'none', justifyContent: 'center' }}
-                              onClick={async () => {
-                                let correctionUrl = correctionPreview
-                                if (correctionFile && isSupabaseConfigured() && supabase) {
-                                  const ext = correctionFile.name.split('.').pop()
-                                  const path = `corrections/${Date.now()}.${ext}`
-                                  const { error: upErr } = await supabase.storage.from('uploads').upload(path, correctionFile)
-                                  if (!upErr) {
-                                    const { data } = supabase.storage.from('uploads').getPublicUrl(path)
-                                    correctionUrl = data.publicUrl
-                                  }
-                                }
-                                const updated = submissions.map(s =>
-                                  s.exerciseId === sub.exerciseId && s.timestamp === sub.timestamp
-                                    ? { ...s, status: 'rejected', feedback: feedbackText, correctionUrl: correctionUrl || null }
-                                    : s
-                                )
-                                setSubmissions(updated)
-                                appStateDb.set('study_submissions', updated)
-                                setFeedbackText('')
-                                setCorrectionFile(null)
-                                setCorrectionPreview(null)
-                              }}
-                            >
-                              <ThumbsDown size={12} /> Rechazar
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-              </div>
-            )}
-          </>
-        )}
 
         <div style={{ height: 24 }} />
 
