@@ -66,7 +66,6 @@ export default function AdminLock() {
                   placeholder="Contrasena"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  autoFocus
                 />
               </div>
               {error && (

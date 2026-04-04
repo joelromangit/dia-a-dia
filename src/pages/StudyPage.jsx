@@ -1398,6 +1398,52 @@ function StudyPage() {
     }))
   }
 
+  // Sync ALL topics in a subject: fix block/topic statuses based on actual exercise progress
+  const handleSyncAllTopics = (subjectId) => {
+    setSubjects(prev => prev.map(s => {
+      if (s.id !== subjectId) return s
+      const topics = s.topics.map(t => {
+        const blocks = (t.theoryBlocks || []).map(b => {
+          const exercises = b.exercises || []
+          if (exercises.length === 0) return b
+          const allComplete = exercises.every(ex =>
+            ex.status === 'done' || ex.status === 'submitted' || ex.status === 'corrected'
+          )
+          if (allComplete && b.status !== 'completed') return { ...b, status: 'completed' }
+          if (!allComplete && b.status === 'completed') return { ...b, status: 'available' }
+          return b
+        })
+        for (let i = 0; i < blocks.length; i++) {
+          if (blocks[i].status === 'completed' && i + 1 < blocks.length && blocks[i + 1].status === 'locked') {
+            blocks[i + 1] = { ...blocks[i + 1], status: 'available' }
+          }
+        }
+        const allBlocksCompleted = blocks.length > 0 && blocks.every(b => b.status === 'completed')
+        const allExercises = blocks.flatMap(b => b.exercises || [])
+        const allExDone = allExercises.length > 0 && allExercises.every(ex =>
+          ex.status === 'done' || ex.status === 'submitted' || ex.status === 'corrected'
+        )
+        let newStatus = t.status
+        if (allBlocksCompleted && allExDone) {
+          newStatus = 'completed'
+        } else if (t.status === 'completed' || t.status === 'locked') {
+          const hasAnyProgress = allExercises.some(ex => ex.status !== 'pending')
+          newStatus = hasAnyProgress ? 'in_progress' : t.status === 'completed' ? 'available' : t.status
+        }
+        return { ...t, status: newStatus, theoryBlocks: blocks }
+      })
+      // Unlock topics after completed ones
+      for (let i = 0; i < topics.length; i++) {
+        if (getTopicStateFromLegacy(topics[i].status) === 'completed' && i + 1 < topics.length) {
+          if (getTopicStateFromLegacy(topics[i + 1].status) === 'locked') {
+            topics[i + 1] = { ...topics[i + 1], status: 'available' }
+          }
+        }
+      }
+      return { ...s, topics }
+    }))
+  }
+
   // Force-complete a single block
   const handleForceCompleteBlock = (blockId) => {
     setSubjects(prev => prev.map(s => {
@@ -1957,17 +2003,32 @@ function StudyPage() {
             <Icon size={20} style={{ color: detail.color }} />
             <span className="font-700 text-lg flex-1">{detail.name}</span>
             {isAdmin && (
-              <button
-                className="btn btn-sm border-none"
-                style={{ background: `${detail.color}20`, color: detail.color }}
-                onClick={() => {
-                  setEditForm({ name: detail.name, color: detail.color, icon: detail.icon })
-                  clearErrors()
-                  setModal('edit-subject')
-                }}
-              >
-                <Settings size={14} />
-              </button>
+              <>
+                <button
+                  className="btn btn-sm border-none"
+                  style={{ background: 'rgba(108,92,231,0.15)', color: 'var(--primary-light)', fontSize: '0.65rem' }}
+                  onClick={() => {
+                    handleSyncAllTopics(detail.id)
+                    setConfirmAction({
+                      message: 'Estados sincronizados. Todos los temas y bloques ahora reflejan el progreso real de los ejercicios.',
+                      onConfirm: () => setConfirmAction(null)
+                    })
+                  }}
+                >
+                  <RefreshCw size={12} /> Sync
+                </button>
+                <button
+                  className="btn btn-sm border-none"
+                  style={{ background: `${detail.color}20`, color: detail.color }}
+                  onClick={() => {
+                    setEditForm({ name: detail.name, color: detail.color, icon: detail.icon })
+                    clearErrors()
+                    setModal('edit-subject')
+                  }}
+                >
+                  <Settings size={14} />
+                </button>
+              </>
             )}
           </div>
 
