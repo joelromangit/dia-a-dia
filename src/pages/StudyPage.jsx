@@ -688,8 +688,12 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
             ) : (() => {
               const pendingEx = allExercises.filter(ex => ex.status === 'pending')
               const submittedEx = allExercises.filter(ex => ex.status === 'submitted')
-              if (pendingEx.length === 0 && submittedEx.length > 0) {
+              const doneEx = allExercises.filter(ex => ex.status === 'done')
+              if (pendingEx.length === 0 && doneEx.length === 0 && submittedEx.length > 0) {
                 return <span style={{ color: 'var(--primary-light)' }}>Pendiente de corregir ({submittedEx.length})</span>
+              }
+              if (doneEx.length > 0 && pendingEx.length === 0) {
+                return <span style={{ color: '#f59e0b' }}>{doneEx.length} por reenviar</span>
               }
               if (pendingEx.length > 0 && pendingEx.length < allExercises.length) {
                 return <span style={{ color: '#f59e0b' }}>{allExercises.length - pendingEx.length}/{allExercises.length} ejercicios - Faltan {pendingEx.length}</span>
@@ -1549,7 +1553,7 @@ function StudyPage() {
       photoUrl = URL.createObjectURL(file)
     }
     // Set exercise back to 'done' with new photo so it can be re-submitted
-    setSubjects(subjects.map(s => {
+    setSubjects(prev => prev.map(s => {
       if (s.id !== activeSubject) return s
       return {
         ...s,
@@ -2085,8 +2089,9 @@ function StudyPage() {
                   const allEx = (topic.theoryBlocks || []).flatMap(b => b.exercises || [])
                   const pendingEx = allEx.filter(ex => ex.status === 'pending')
                   const submittedEx = allEx.filter(ex => ex.status === 'submitted')
+                  const doneEx = allEx.filter(ex => ex.status === 'done')
                   const isPartial = state === 'in_progress' && allEx.length > 0 && pendingEx.length > 0 && pendingEx.length < allEx.length
-                  const onlyCorrectionLeft = state === 'in_progress' && pendingEx.length === 0 && submittedEx.length > 0
+                  const onlyCorrectionLeft = state === 'in_progress' && pendingEx.length === 0 && doneEx.length === 0 && submittedEx.length > 0
 
                   if (onlyCorrectionLeft) {
                     return (
@@ -2485,7 +2490,7 @@ function StudyPage() {
                               style={{ background: 'rgba(0,206,201,0.15)', color: 'var(--success)', border: 'none', justifyContent: 'center' }}
                               onClick={() => {
                                 const updated = submissions.map(s =>
-                                  s.exerciseId === sub.exerciseId
+                                  s.exerciseId === sub.exerciseId && s.timestamp === sub.timestamp
                                     ? { ...s, status: 'approved', feedback: feedbackText }
                                     : s
                                 )
@@ -2513,7 +2518,7 @@ function StudyPage() {
                                   }
                                 }
                                 const updated = submissions.map(s =>
-                                  s.exerciseId === sub.exerciseId
+                                  s.exerciseId === sub.exerciseId && s.timestamp === sub.timestamp
                                     ? { ...s, status: 'rejected', feedback: feedbackText, correctionUrl: correctionUrl || null }
                                     : s
                                 )
