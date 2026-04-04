@@ -275,6 +275,9 @@ function recalculatePlan(plan, subjects) {
       const isAhead = today < entry.date
       return { ...entry, completed: true, completedDate: today, isAhead }
     }
+    if (!isCompleted && entry.completed) {
+      return { ...entry, completed: false, isAhead: false, completedDate: null }
+    }
     return { ...entry, completed: isCompleted }
   })
 
@@ -355,10 +358,22 @@ function SubmissionStatusBadge({ exerciseId, submissions = [] }) {
   }
   if (sub.status === 'rejected') {
     return (
-      <div className="flex items-center gap-1 mt-1">
-        <ThumbsDown size={12} style={{ color: 'var(--danger)' }} />
-        <span className="text-xs text-danger font-600">Rechazado</span>
-        {sub.feedback && <span className="text-xs text-muted"> - {sub.feedback}</span>}
+      <div style={{ marginTop: 4 }}>
+        <div className="flex items-center gap-1">
+          <ThumbsDown size={12} style={{ color: 'var(--danger)' }} />
+          <span className="text-xs text-danger font-600">Rechazado</span>
+          {sub.feedback && <span className="text-xs text-muted"> - {sub.feedback}</span>}
+        </div>
+        {sub.correctionUrl && (
+          <div style={{ marginTop: 6 }}>
+            <div className="text-xs text-muted" style={{ fontWeight: 600, marginBottom: 4 }}>Correccion del profesor:</div>
+            <img
+              src={sub.correctionUrl}
+              alt="Correccion"
+              style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, border: '1px solid var(--danger)' }}
+            />
+          </div>
+        )}
       </div>
     )
   }
@@ -616,13 +631,23 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
               <span style={{ color: 'var(--text-muted)' }}>Bloqueado</span>
             ) : isCompleted ? (
               <span style={{ color: 'var(--success)' }}>Completado</span>
-            ) : (
-              <>
-                {allExercises.length} ejercicios
-                {allDone && !allSubmitted && ' - Listos para enviar'}
-                {allSubmitted && ' - Enviados'}
-              </>
-            )}
+            ) : (() => {
+              const pendingEx = allExercises.filter(ex => ex.status === 'pending')
+              const submittedEx = allExercises.filter(ex => ex.status === 'submitted')
+              if (pendingEx.length === 0 && submittedEx.length > 0) {
+                return <span style={{ color: 'var(--primary-light)' }}>Pendiente de corregir ({submittedEx.length})</span>
+              }
+              if (pendingEx.length > 0 && pendingEx.length < allExercises.length) {
+                return <span style={{ color: '#f59e0b' }}>{allExercises.length - pendingEx.length}/{allExercises.length} ejercicios - Faltan {pendingEx.length}</span>
+              }
+              return (
+                <>
+                  {allExercises.length} ejercicios
+                  {allDone && !allSubmitted && ' - Listos para enviar'}
+                  {allSubmitted && ' - Enviados'}
+                </>
+              )
+            })()}
           </div>
         </div>
         {isCompleted && onReopen && (
@@ -875,6 +900,9 @@ function StudyPage() {
   const [showCorrections, setShowCorrections] = useState(false)
   const [submissions, setSubmissions] = useState([])
   const [feedbackText, setFeedbackText] = useState('')
+  const [correctionFile, setCorrectionFile] = useState(null)
+  const [correctionPreview, setCorrectionPreview] = useState(null)
+  const correctionFileRef = useRef(null)
   const [errors, setErrors] = useState({})
   const [unlockPrompt, setUnlockPrompt] = useState(null) // { type, subjectId, topicIndex?, blockId? }
   const [unlockPassword, setUnlockPassword] = useState('')
@@ -1219,27 +1247,40 @@ function StudyPage() {
 
   // Reopen a completed topic back to in_progress
   const handleReopenTopic = (subjectId, topicName, topicOrder) => {
+    const resetExerciseIds = []
     setSubjects(prev => prev.map(s => {
       if (s.id !== subjectId) return s
       return {
         ...s,
         topics: s.topics.map(t => {
           if (t.name !== topicName || t.order !== topicOrder) return t
-          // Set topic to in_progress, reopen last block that was completed
           const blocks = (t.theoryBlocks || []).map(b => {
-            if (b.status === 'completed') {
-              // Check if all exercises are actually done
-              const allDone = (b.exercises || []).every(ex =>
-                ex.status === 'done' || ex.status === 'submitted' || ex.status === 'corrected'
-              )
-              return allDone ? b : { ...b, status: 'available' }
+            if (b.status !== 'completed') return b
+            const allDone = (b.exercises || []).every(ex =>
+              ex.status === 'done' || ex.status === 'submitted' || ex.status === 'corrected'
+            )
+            if (allDone) return b
+            // Reset incomplete block and its exercises
+            return {
+              ...b,
+              status: 'available',
+              exercises: (b.exercises || []).map(ex => {
+                if (ex.status !== 'pending') resetExerciseIds.push(ex.id)
+                return { ...ex, status: 'pending', studentAnswer: null, photoUrl: null }
+              })
             }
-            return b
           })
           return { ...t, status: 'in_progress', theoryBlocks: blocks }
         })
       }
     }))
+    if (resetExerciseIds.length > 0) {
+      setSubmissions(prev => {
+        const updated = prev.filter(s => !resetExerciseIds.includes(s.exerciseId))
+        appStateDb.set('study_submissions', updated)
+        return updated
+      })
+    }
   }
 
   // Force-complete a single block
@@ -1263,20 +1304,37 @@ function StudyPage() {
     }))
   }
 
-  // Reopen a completed block back to available
+  // Reopen a completed block back to available, reset exercise statuses
   const handleReopenBlock = (blockId) => {
+    const resetExerciseIds = []
     setSubjects(prev => prev.map(s => {
       if (s.id !== activeSubject) return s
       return {
         ...s,
         topics: s.topics.map(t => ({
           ...t,
-          theoryBlocks: (t.theoryBlocks || []).map(b =>
-            b.id === blockId ? { ...b, status: 'available' } : b
-          )
+          theoryBlocks: (t.theoryBlocks || []).map(b => {
+            if (b.id !== blockId) return b
+            return {
+              ...b,
+              status: 'available',
+              exercises: (b.exercises || []).map(ex => {
+                if (ex.status !== 'pending') resetExerciseIds.push(ex.id)
+                return { ...ex, status: 'pending', studentAnswer: null, photoUrl: null }
+              })
+            }
+          })
         }))
       }
     }))
+    // Also remove related submissions
+    if (resetExerciseIds.length > 0) {
+      setSubmissions(prev => {
+        const updated = prev.filter(s => !resetExerciseIds.includes(s.exerciseId))
+        appStateDb.set('study_submissions', updated)
+        return updated
+      })
+    }
   }
 
   const openTopic = (topic, blockId = null) => {
@@ -1493,31 +1551,62 @@ function StudyPage() {
               <button
                 className="btn btn-sm border-none"
                 style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontSize: '0.7rem' }}
-                onClick={() => setConfirmAction({
-                  message: 'Reabrir este tema? Los bloques sin ejercicios completados se desbloquean.',
-                  onConfirm: () => {
-                    handleReopenTopic(detail.id, currentTopicData.name, currentTopicData.order)
-                    setConfirmAction(null)
-                  }
-                })}
+                onClick={() => {
+                  const blocks = currentTopicData.theoryBlocks || []
+                  const completedBlocks = blocks.filter(b => b.status === 'completed').length
+                  const totalExDone = blocks.flatMap(b => b.exercises || []).filter(ex => ex.status !== 'pending').length
+                  const parts = []
+                  if (completedBlocks > 0) parts.push(`${completedBlocks} bloque${completedBlocks > 1 ? 's' : ''} completado${completedBlocks > 1 ? 's' : ''}`)
+                  if (totalExDone > 0) parts.push(`el progreso de ${totalExDone} ejercicio${totalExDone > 1 ? 's' : ''}`)
+                  const lossMsg = parts.length > 0 ? `Perderas ${parts.join(' y ')}.` : ''
+                  setConfirmAction({
+                    message: `Seguro que quieres reabrir este tema? ${lossMsg}`,
+                    onConfirm: () => {
+                      handleReopenTopic(detail.id, currentTopicData.name, currentTopicData.order)
+                      setConfirmAction(null)
+                    }
+                  })
+                }}
               >
                 <Unlock size={12} /> Reabrir
               </button>
-            ) : topicState !== 'locked' ? (
-              <button
-                className="btn btn-sm border-none"
-                style={{ background: 'rgba(0,206,201,0.15)', color: 'var(--success)', fontSize: '0.7rem' }}
-                onClick={() => setConfirmAction({
-                  message: 'Dar por finalizado este tema sin completar todos los ejercicios?',
-                  onConfirm: () => {
-                    handleForceCompleteTopic(detail.id, currentTopicData.name, currentTopicData.order)
-                    setConfirmAction(null)
-                  }
-                })}
-              >
-                <CheckCircle size={12} /> Finalizar tema
-              </button>
-            ) : null}
+            ) : topicState !== 'locked' ? (() => {
+              const allEx = (currentTopicData.theoryBlocks || []).flatMap(b => b.exercises || [])
+              const pendingEx = allEx.filter(ex => ex.status === 'pending')
+              const hasPending = pendingEx.length > 0
+              return (
+                <button
+                  className="btn btn-sm border-none"
+                  style={{
+                    background: hasPending ? 'rgba(136,136,160,0.12)' : 'rgba(0,206,201,0.15)',
+                    color: hasPending ? 'var(--text-muted)' : 'var(--success)',
+                    fontSize: '0.7rem',
+                    opacity: hasPending ? 0.6 : 1,
+                  }}
+                  onClick={() => {
+                    if (hasPending) {
+                      const blockNames = (currentTopicData.theoryBlocks || [])
+                        .filter(b => (b.exercises || []).some(ex => ex.status === 'pending'))
+                        .map(b => b.title)
+                      setConfirmAction({
+                        message: `No puedes finalizar este tema. Quedan ${pendingEx.length} ejercicio${pendingEx.length > 1 ? 's' : ''} por entregar en: ${blockNames.join(', ')}.`,
+                        onConfirm: () => setConfirmAction(null)
+                      })
+                      return
+                    }
+                    setConfirmAction({
+                      message: 'Dar por finalizado este tema?',
+                      onConfirm: () => {
+                        handleForceCompleteTopic(detail.id, currentTopicData.name, currentTopicData.order)
+                        setConfirmAction(null)
+                      }
+                    })
+                  }}
+                >
+                  <CheckCircle size={12} /> Finalizar tema
+                </button>
+              )
+            })() : null}
           </div>
         </div>
 
@@ -1543,10 +1632,20 @@ function StudyPage() {
                   message: 'Finalizar este bloque sin completar todos los ejercicios?',
                   onConfirm: () => { handleForceCompleteBlock(blockId); setConfirmAction(null) }
                 })}
-                onReopen={(blockId) => setConfirmAction({
-                  message: 'Reabrir este bloque?',
-                  onConfirm: () => { handleReopenBlock(blockId); setConfirmAction(null) }
-                })}
+                onReopen={(blockId) => {
+                  const block = (currentTopicData.theoryBlocks || []).find(b => b.id === blockId)
+                  const exercises = block?.exercises || []
+                  const doneCount = exercises.filter(ex => ex.status === 'done').length
+                  const submittedCount = exercises.filter(ex => ex.status === 'submitted' || ex.status === 'corrected').length
+                  const parts = []
+                  if (doneCount > 0) parts.push(`${doneCount} ejercicio${doneCount > 1 ? 's' : ''} completado${doneCount > 1 ? 's' : ''}`)
+                  if (submittedCount > 0) parts.push(`${submittedCount} ejercicio${submittedCount > 1 ? 's' : ''} enviado${submittedCount > 1 ? 's' : ''}`)
+                  const lossMsg = parts.length > 0 ? `Perderas ${parts.join(' y ')}.` : ''
+                  setConfirmAction({
+                    message: `Seguro que quieres reabrir este bloque? ${lossMsg} Se reiniciaran todos los ejercicios.`,
+                    onConfirm: () => { handleReopenBlock(blockId); setConfirmAction(null) }
+                  })
+                }}
                 expandedBlockId={expandedBlockId}
                 submissions={submissions}
               />
@@ -1843,17 +1942,51 @@ function StudyPage() {
                     </div>
                   )
                 })()}
-                <span style={{
-                  fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase',
-                  padding: '3px 8px', borderRadius: 10,
-                  background: state === 'in_progress' ? `${detail.color}20`
-                    : state === 'completed' ? 'rgba(0,206,201,0.15)'
-                    : state === 'available' ? 'rgba(108,92,231,0.12)'
-                    : 'rgba(136,136,160,0.12)',
-                  color: state === 'in_progress' ? detail.color : config.color,
-                }}>
-                  {config.label}
-                </span>
+                {(() => {
+                  const allEx = (topic.theoryBlocks || []).flatMap(b => b.exercises || [])
+                  const pendingEx = allEx.filter(ex => ex.status === 'pending')
+                  const submittedEx = allEx.filter(ex => ex.status === 'submitted')
+                  const isPartial = state === 'in_progress' && allEx.length > 0 && pendingEx.length > 0 && pendingEx.length < allEx.length
+                  const onlyCorrectionLeft = state === 'in_progress' && pendingEx.length === 0 && submittedEx.length > 0
+
+                  if (onlyCorrectionLeft) {
+                    return (
+                      <span style={{
+                        fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase',
+                        padding: '3px 8px', borderRadius: 10,
+                        background: 'rgba(108,92,231,0.12)', color: 'var(--primary-light)',
+                      }}>
+                        Por corregir
+                      </span>
+                    )
+                  }
+
+                  if (isPartial) {
+                    return (
+                      <span style={{
+                        fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase',
+                        padding: '3px 8px', borderRadius: 10,
+                        background: 'rgba(255,165,0,0.12)', color: '#f59e0b',
+                      }}>
+                        Parcial ({allEx.length - pendingEx.length}/{allEx.length})
+                      </span>
+                    )
+                  }
+
+                  return (
+                    <span style={{
+                      fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase',
+                      padding: '3px 8px', borderRadius: 10,
+                      background: state === 'in_progress' ? `${detail.color}20`
+                        : state === 'completed' ? 'rgba(0,206,201,0.15)'
+                        : state === 'available' ? 'rgba(108,92,231,0.12)'
+                        : 'rgba(136,136,160,0.12)',
+                      color: state === 'in_progress' ? detail.color : config.color,
+                    }}>
+                      {config.label}
+                    </span>
+                  )
+                })()}
               </div>
             )
           })}
@@ -2156,6 +2289,16 @@ function StudyPage() {
                           {sub.feedback}
                         </div>
                       )}
+                      {sub.correctionUrl && (
+                        <div style={{ marginBottom: 8 }}>
+                          <div className="text-xs text-muted mb-1" style={{ fontWeight: 600 }}>Correccion:</div>
+                          <img
+                            src={sub.correctionUrl}
+                            alt="Correccion"
+                            style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, border: '1px solid var(--danger)' }}
+                          />
+                        </div>
+                      )}
                       {sub.status === 'pending' && (
                         <div>
                           <div className="flex gap-6 mb-2">
@@ -2166,6 +2309,37 @@ function StudyPage() {
                               style={{ fontSize: '0.78rem', padding: '6px 8px' }}
                             />
                           </div>
+                          <div className="flex gap-6 mb-2">
+                            <input
+                              ref={correctionFileRef}
+                              type="file"
+                              accept="image/*"
+                              style={{ display: 'none' }}
+                              onChange={e => {
+                                const file = e.target.files?.[0]
+                                if (file) {
+                                  setCorrectionFile(file)
+                                  setCorrectionPreview(URL.createObjectURL(file))
+                                }
+                              }}
+                            />
+                            <button
+                              className="btn btn-sm btn-outline flex-1"
+                              style={{ justifyContent: 'center', fontSize: '0.72rem' }}
+                              onClick={() => correctionFileRef.current?.click()}
+                            >
+                              <Upload size={12} /> {correctionFile ? 'Foto subida' : 'Subir correccion'}
+                            </button>
+                          </div>
+                          {correctionPreview && (
+                            <div style={{ marginBottom: 8 }}>
+                              <img
+                                src={correctionPreview}
+                                alt="Preview correccion"
+                                style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid var(--border)' }}
+                              />
+                            </div>
+                          )}
                           <div className="flex gap-6">
                             <button
                               className="btn btn-sm flex-1"
@@ -2179,6 +2353,8 @@ function StudyPage() {
                                 setSubmissions(updated)
                                 appStateDb.set('study_submissions', updated)
                                 setFeedbackText('')
+                                setCorrectionFile(null)
+                                setCorrectionPreview(null)
                               }}
                             >
                               <ThumbsUp size={12} /> Aprobar
@@ -2186,15 +2362,27 @@ function StudyPage() {
                             <button
                               className="btn btn-sm flex-1"
                               style={{ background: 'rgba(255,118,117,0.15)', color: 'var(--danger)', border: 'none', justifyContent: 'center' }}
-                              onClick={() => {
+                              onClick={async () => {
+                                let correctionUrl = correctionPreview
+                                if (correctionFile && isSupabaseConfigured() && supabase) {
+                                  const ext = correctionFile.name.split('.').pop()
+                                  const path = `corrections/${Date.now()}.${ext}`
+                                  const { error: upErr } = await supabase.storage.from('uploads').upload(path, correctionFile)
+                                  if (!upErr) {
+                                    const { data } = supabase.storage.from('uploads').getPublicUrl(path)
+                                    correctionUrl = data.publicUrl
+                                  }
+                                }
                                 const updated = submissions.map(s =>
                                   s.exerciseId === sub.exerciseId
-                                    ? { ...s, status: 'rejected', feedback: feedbackText }
+                                    ? { ...s, status: 'rejected', feedback: feedbackText, correctionUrl: correctionUrl || null }
                                     : s
                                 )
                                 setSubmissions(updated)
                                 appStateDb.set('study_submissions', updated)
                                 setFeedbackText('')
+                                setCorrectionFile(null)
+                                setCorrectionPreview(null)
                               }}
                             >
                               <ThumbsDown size={12} /> Rechazar
