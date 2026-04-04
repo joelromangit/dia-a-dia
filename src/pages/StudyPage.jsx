@@ -4,7 +4,7 @@ import {
   Calculator, Leaf, FlaskConical, BookOpen, Globe, Atom,
   Lock, Unlock, CheckCircle, ChevronDown, ChevronUp,
   Camera, Send, ArrowLeft, Image, Upload, Zap,
-  Clock, MessageSquare, ThumbsUp, ThumbsDown, ClipboardList
+  Clock, MessageSquare, ThumbsUp, ThumbsDown, ClipboardList, RefreshCw
 } from 'lucide-react'
 import katex from 'katex'
 import { mockStudy } from '../data/mockData'
@@ -1337,6 +1337,63 @@ function StudyPage() {
     }
   }
 
+  // Sync topic state: fix block/topic statuses based on actual exercise progress (non-destructive)
+  const handleSyncTopicState = (subjectId, topicName, topicOrder) => {
+    setSubjects(prev => prev.map(s => {
+      if (s.id !== subjectId) return s
+      let topicChanged = false
+      const topics = s.topics.map(t => {
+        if (t.name !== topicName || t.order !== topicOrder) return t
+        const blocks = (t.theoryBlocks || []).map((b, i, arr) => {
+          const exercises = b.exercises || []
+          if (exercises.length === 0) return b
+          const allComplete = exercises.every(ex =>
+            ex.status === 'done' || ex.status === 'submitted' || ex.status === 'corrected'
+          )
+          if (allComplete && b.status !== 'completed') {
+            return { ...b, status: 'completed' }
+          }
+          if (!allComplete && b.status === 'completed') {
+            return { ...b, status: 'available' }
+          }
+          return b
+        })
+        // Unlock blocks after completed ones
+        for (let i = 0; i < blocks.length; i++) {
+          if (blocks[i].status === 'completed' && i + 1 < blocks.length && blocks[i + 1].status === 'locked') {
+            blocks[i + 1] = { ...blocks[i + 1], status: 'available' }
+          }
+        }
+        // Determine correct topic status
+        const allBlocksCompleted = blocks.length > 0 && blocks.every(b => b.status === 'completed')
+        const allExercises = blocks.flatMap(b => b.exercises || [])
+        const allExDone = allExercises.length > 0 && allExercises.every(ex =>
+          ex.status === 'done' || ex.status === 'submitted' || ex.status === 'corrected'
+        )
+        let newStatus = t.status
+        if (allBlocksCompleted && allExDone) {
+          newStatus = 'completed'
+        } else if (t.status === 'completed' || t.status === 'locked') {
+          // Was completed but exercises aren't all done, or was locked but has progress
+          const hasAnyProgress = allExercises.some(ex => ex.status !== 'pending')
+          newStatus = hasAnyProgress ? 'in_progress' : t.status === 'completed' ? 'available' : t.status
+        }
+        topicChanged = newStatus !== t.status
+        return { ...t, status: newStatus, theoryBlocks: blocks }
+      })
+      // If topic changed to completed, unlock next
+      if (topicChanged) {
+        const idx = topics.findIndex(t => t.name === topicName && t.order === topicOrder)
+        if (idx >= 0 && topics[idx].status === 'completed' && idx + 1 < topics.length) {
+          if (getTopicStateFromLegacy(topics[idx + 1].status) === 'locked') {
+            topics[idx + 1] = { ...topics[idx + 1], status: 'available' }
+          }
+        }
+      }
+      return { ...s, topics }
+    }))
+  }
+
   // Force-complete a single block
   const handleForceCompleteBlock = (blockId) => {
     setSubjects(prev => prev.map(s => {
@@ -1636,30 +1693,22 @@ function StudyPage() {
               <div className="font-700 text-lg">{currentTopicData.name}</div>
               <div className="text-xs text-muted">{detail.name}</div>
             </div>
-            {topicState === 'completed' ? (
+            {isAdmin && (
               <button
                 className="btn btn-sm border-none"
-                style={{ background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontSize: '0.7rem' }}
+                style={{ background: 'rgba(108,92,231,0.15)', color: 'var(--primary-light)', fontSize: '0.7rem' }}
                 onClick={() => {
-                  const blocks = currentTopicData.theoryBlocks || []
-                  const completedBlocks = blocks.filter(b => b.status === 'completed').length
-                  const totalExDone = blocks.flatMap(b => b.exercises || []).filter(ex => ex.status !== 'pending').length
-                  const parts = []
-                  if (completedBlocks > 0) parts.push(`${completedBlocks} bloque${completedBlocks > 1 ? 's' : ''} completado${completedBlocks > 1 ? 's' : ''}`)
-                  if (totalExDone > 0) parts.push(`el progreso de ${totalExDone} ejercicio${totalExDone > 1 ? 's' : ''}`)
-                  const lossMsg = parts.length > 0 ? `Perderas ${parts.join(' y ')}.` : ''
+                  handleSyncTopicState(detail.id, currentTopicData.name, currentTopicData.order)
                   setConfirmAction({
-                    message: `Seguro que quieres reabrir este tema? ${lossMsg}`,
-                    onConfirm: () => {
-                      handleReopenTopic(detail.id, currentTopicData.name, currentTopicData.order)
-                      setConfirmAction(null)
-                    }
+                    message: 'Estado sincronizado. Los bloques y el tema ahora reflejan el progreso real de los ejercicios.',
+                    onConfirm: () => setConfirmAction(null)
                   })
                 }}
               >
-                <Unlock size={12} /> Reabrir
+                <RefreshCw size={12} /> Sincronizar
               </button>
-            ) : topicState !== 'locked' ? (() => {
+            )}
+            {topicState !== 'locked' && topicState !== 'completed' ? (() => {
               const allEx = (currentTopicData.theoryBlocks || []).flatMap(b => b.exercises || [])
               const pendingEx = allEx.filter(ex => ex.status === 'pending')
               const hasPending = pendingEx.length > 0
