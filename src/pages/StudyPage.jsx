@@ -537,13 +537,14 @@ function AutoExerciseFillBlank({ exercise, onAnswer }) {
   )
 }
 
-function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, submissions }) {
+function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto, submissions }) {
   const fileRef = useRef(null)
   const retryFileRef = useRef(null)
   const isDone = exercise.status === 'done' || exercise.status === 'submitted'
   const allSubs = submissions.filter(s => s.exerciseId === exercise.id)
   const latestSub = allSubs.length > 0 ? allSubs[allSubs.length - 1] : null
   const isRejected = latestSub?.status === 'rejected'
+  const isPendingReview = latestSub?.status === 'pending'
 
   return (
     <div style={{ padding: '10px 0' }}>
@@ -567,8 +568,8 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, submissions })
             {allSubs.length > 1 && <span className="text-xs text-muted">(Intento {allSubs.length})</span>}
           </div>
           <SubmissionStatusBadge exerciseId={exercise.id} submissions={submissions} />
-          {isRejected && (
-            <div style={{ marginTop: 8 }}>
+          {(isRejected || isPendingReview) && (
+            <div style={{ marginTop: 8 }} className="flex gap-6">
               <input
                 ref={retryFileRef}
                 type="file"
@@ -585,7 +586,14 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, submissions })
                 style={{ background: 'rgba(108,92,231,0.15)', color: 'var(--primary-light)', border: 'none' }}
                 onClick={() => retryFileRef.current?.click()}
               >
-                <Camera size={14} /> Subir nueva foto
+                <Camera size={14} /> Cambiar foto
+              </button>
+              <button
+                className="btn btn-sm"
+                style={{ background: 'rgba(255,118,117,0.15)', color: 'var(--danger)', border: 'none' }}
+                onClick={() => onDeletePhoto(exercise.id)}
+              >
+                <Trash2 size={14} /> Borrar
               </button>
             </div>
           )}
@@ -643,7 +651,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, submissions })
   )
 }
 
-function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPhotoUpload, onRetryUpload, onSubmitForReview, onForceUnlock, onForceComplete, onReopen, expandedBlockId, submissions }) {
+function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPhotoUpload, onRetryUpload, onDeletePhoto, onSubmitForReview, onForceUnlock, onForceComplete, onReopen, expandedBlockId, submissions }) {
   const blockStatus = block.status || 'available'
   const isLocked = blockStatus === 'locked' && !isAdmin
   const isCompleted = blockStatus === 'completed'
@@ -778,7 +786,7 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
                     <AutoExerciseFillBlank exercise={ex} onAnswer={onExerciseAnswer} />
                   )}
                   {ex.type === 'manual' && (
-                    <ManualExercise exercise={ex} onPhotoUpload={onPhotoUpload} onRetryUpload={onRetryUpload} submissions={submissions} />
+                    <ManualExercise exercise={ex} onPhotoUpload={onPhotoUpload} onRetryUpload={onRetryUpload} onDeletePhoto={onDeletePhoto} submissions={submissions} />
                   )}
                 </div>
               )})}
@@ -1589,6 +1597,29 @@ function StudyPage() {
     }
   }
 
+  const handleDeletePhoto = (exerciseId) => {
+    // Reset exercise to pending and remove pending submissions
+    setSubjects(prev => prev.map(s => {
+      if (s.id !== activeSubject) return s
+      return {
+        ...s,
+        topics: s.topics.map(t => ({
+          ...t,
+          theoryBlocks: (t.theoryBlocks || []).map(b => ({
+            ...b,
+            exercises: (b.exercises || []).map(ex =>
+              ex.id === exerciseId ? { ...ex, status: 'pending', photoUrl: null, studentAnswer: null } : ex
+            )
+          }))
+        }))
+      }
+    }))
+    // Remove pending submissions for this exercise
+    const updatedSubs = submissions.filter(s => !(s.exerciseId === exerciseId && s.status === 'pending'))
+    setSubmissions(updatedSubs)
+    appStateDb.set('study_submissions', updatedSubs)
+  }
+
   const handleRetryUpload = async (exerciseId, file) => {
     let photoUrl = null
     if (isSupabaseConfigured() && supabase) {
@@ -1619,6 +1650,10 @@ function StudyPage() {
         }))
       }
     }))
+    // Remove pending submission so it can be re-submitted with new photo
+    const updatedSubs = submissions.filter(s => !(s.exerciseId === exerciseId && s.status === 'pending'))
+    setSubmissions(updatedSubs)
+    appStateDb.set('study_submissions', updatedSubs)
   }
 
   const handleSubmitForReview = (blockId) => {
@@ -1825,6 +1860,7 @@ function StudyPage() {
                 onExerciseAnswer={handleExerciseAnswer}
                 onPhotoUpload={handlePhotoUpload}
                 onRetryUpload={handleRetryUpload}
+                onDeletePhoto={handleDeletePhoto}
                 onSubmitForReview={handleSubmitForReview}
                 onForceUnlock={handleForceUnlock}
                 onForceComplete={(blockId) => setConfirmAction({
