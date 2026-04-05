@@ -75,7 +75,7 @@ const TOPIC_STATE_CONFIG = {
 // Check if an exercise is truly complete:
 // - auto exercises: done/submitted/corrected = complete
 // - manual exercises: only complete if latest submission is approved
-function isExerciseComplete(ex, submissions) {
+function isExerciseComplete(ex, submissions = []) {
   if (ex.status === 'corrected') return true
   if (ex.status === 'done') return true
   if (ex.status === 'submitted') {
