@@ -1,3 +1,15 @@
+// Force update: skip waiting and claim all clients immediately
+self.addEventListener('install', () => self.skipWaiting())
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    Promise.all([
+      self.clients.claim(),
+      // Clear any old caches
+      caches.keys().then(keys => Promise.all(keys.map(key => caches.delete(key))))
+    ])
+  )
+})
+
 let alarmTimeout = null
 
 self.addEventListener('message', (event) => {
