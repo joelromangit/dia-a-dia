@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import katex from 'katex'
 import { mockStudy } from '../data/mockData'
-import { sendWhatsAppNotification } from '../lib/notifications'
+import { sendWhatsAppNotification, sendStudentWhatsApp } from '../lib/notifications'
 import { useAdmin } from '../contexts/AdminContext'
 import { supabase, isSupabaseConfigured } from '../lib/supabase'
 import { appStateDb } from '../lib/db'
@@ -64,6 +64,50 @@ const ICON_OPTIONS = [
 const COLOR_OPTIONS = ['#ff6b6b', '#51cf66', '#4f8cff', '#ffd43b', '#cc5de8', '#ff922b', '#20c997', '#748ffc']
 
 const TOPIC_STATES = ['locked', 'available', 'in_progress', 'completed']
+
+function PhotoLightbox({ src, alt, onClose }) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: 'rgba(0,0,0,0.92)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 16, cursor: 'zoom-out',
+      }}
+    >
+      <button onClick={onClose} style={{
+        position: 'absolute', top: 16, right: 16,
+        background: 'rgba(255,255,255,0.15)', border: 'none', borderRadius: '50%',
+        width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+      }}>
+        <X size={20} color="white" />
+      </button>
+      <img
+        src={src}
+        alt={alt || 'Foto'}
+        onClick={e => e.stopPropagation()}
+        style={{ maxWidth: '100%', maxHeight: '90vh', borderRadius: 8, objectFit: 'contain', cursor: 'default' }}
+      />
+    </div>
+  )
+}
+
+function ClickablePhoto({ src, alt, style }) {
+  const [open, setOpen] = useState(false)
+  if (!src) return null
+  return (
+    <>
+      <img
+        src={src}
+        alt={alt || 'Foto'}
+        onClick={() => setOpen(true)}
+        style={{ ...style, cursor: 'zoom-in' }}
+      />
+      {open && <PhotoLightbox src={src} alt={alt} onClose={() => setOpen(false)} />}
+    </>
+  )
+}
 
 const TOPIC_STATE_CONFIG = {
   locked: { icon: Lock, label: 'Bloqueado', color: 'var(--text-muted)' },
@@ -571,7 +615,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
       <div className="text-0\.85 mb-2"><MathText text={exercise.question} /></div>
       {exercise.photoUrl && (
         <div style={{ marginBottom: 8 }}>
-          <img
+          <ClickablePhoto
             src={exercise.photoUrl}
             alt="Respuesta"
             style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, border: '1px solid var(--border)' }}
@@ -601,7 +645,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
           {latestSub?.correctionUrl && (
             <div style={{ marginTop: 6 }}>
               <div className="text-xs text-muted mb-1" style={{ fontWeight: 600 }}>Correccion:</div>
-              <img src={latestSub.correctionUrl} alt="Correccion" style={{ maxWidth: '100%', maxHeight: 150, borderRadius: 8, border: '1px solid var(--danger)' }} />
+              <ClickablePhoto src={latestSub.correctionUrl} alt="Correccion" style={{ maxWidth: '100%', maxHeight: 150, borderRadius: 8, border: '1px solid var(--danger)' }} />
             </div>
           )}
           {/* Student actions: change/delete photo when pending or rejected */}
@@ -718,7 +762,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
                 </div>
                 {sub.feedback && <div className="text-xs text-muted mt-1">{sub.feedback}</div>}
                 {sub.photoUrl && (
-                  <img src={sub.photoUrl} alt={`Intento ${i + 1}`} style={{ maxWidth: '100%', maxHeight: 100, borderRadius: 6, marginTop: 4, opacity: 0.7 }} />
+                  <ClickablePhoto src={sub.photoUrl} alt={`Intento ${i + 1}`} style={{ maxWidth: '100%', maxHeight: 100, borderRadius: 6, marginTop: 4, opacity: 0.7 }} />
                 )}
               </div>
             ))}
@@ -753,7 +797,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
   )
 }
 
-function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPhotoUpload, onRetryUpload, onDeletePhoto, onCorrect, onSubmitForReview, onForceUnlock, onForceComplete, onReopen, expandedBlockId, submissions }) {
+function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPhotoUpload, onRetryUpload, onDeletePhoto, onCorrect, onSubmitForReview, onConfirmAction, onForceUnlock, onForceComplete, onReopen, expandedBlockId, submissions }) {
   const blockStatus = block.status || 'available'
   const isLocked = blockStatus === 'locked' && !isAdmin
   const isCompleted = blockStatus === 'completed'
@@ -762,12 +806,27 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
   const allDone = allExercises.length > 0 && allExercises.every(ex => ex.status === 'done' || ex.status === 'submitted' || ex.status === 'corrected')
   const allSubmitted = allExercises.length > 0 && allExercises.every(ex => ex.status === 'submitted' || ex.status === 'corrected')
   const allTrulyComplete = allExercises.length > 0 && allExercises.every(ex => isExerciseComplete(ex, submissions))
+  const someDone = allExercises.some(ex => ex.status === 'done')
+  const doneCount = allExercises.filter(ex => ex.status === 'done').length
+  const isPartialSubmit = someDone && !allDone
   const [showSuccess, setShowSuccess] = useState(false)
 
   const handleSubmit = () => {
-    onSubmitForReview(block.id)
-    setShowSuccess(true)
-    setTimeout(() => setShowSuccess(false), 3000)
+    if (isPartialSubmit) {
+      const pendingCount = allExercises.filter(ex => ex.status === 'pending').length
+      onConfirmAction({
+        message: `Faltan ${pendingCount} ejercicios por hacer. Quieres entregar de forma parcial?`,
+        onConfirm: () => {
+          onSubmitForReview(block.id)
+          setShowSuccess(true)
+          setTimeout(() => setShowSuccess(false), 3000)
+        }
+      })
+    } else {
+      onSubmitForReview(block.id)
+      setShowSuccess(true)
+      setTimeout(() => setShowSuccess(false), 3000)
+    }
   }
 
   return (
@@ -819,7 +878,7 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
               return (
                 <>
                   {allExercises.length} ejercicios
-                  {allDone && !allSubmitted && ' - Listos para enviar'}
+                  {someDone && !allSubmitted && ' - Listos para enviar'}
                   {allSubmitted && ' - Enviados'}
                 </>
               )
@@ -902,7 +961,7 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
                 </div>
               )})}
 
-              {allDone && !allSubmitted && (
+              {someDone && !allSubmitted && (
                 <button
                   className="btn btn-sm w-full mt-3"
                   style={{ background: `${subjectColor}20`, color: subjectColor, border: 'none', justifyContent: 'center' }}
@@ -1741,6 +1800,11 @@ function StudyPage() {
     )
     setSubmissions(updated)
     appStateDb.set('study_submissions', updated)
+
+    // Notify student via WhatsApp
+    const statusText = status === 'approved' ? 'aprobado' : 'rechazado'
+    const feedbackText = feedback ? ` - ${feedback}` : ''
+    sendStudentWhatsApp(`Ejercicio ${statusText}${feedbackText}`)
   }
 
   const handleRetryUpload = async (exerciseId, file) => {
@@ -1986,6 +2050,7 @@ function StudyPage() {
                 onDeletePhoto={handleDeletePhoto}
                 onCorrect={handleCorrectExercise}
                 onSubmitForReview={handleSubmitForReview}
+                onConfirmAction={setConfirmAction}
                 onForceUnlock={handleForceUnlock}
                 onForceComplete={(blockId) => setConfirmAction({
                   message: 'Finalizar este bloque sin completar todos los ejercicios?',
@@ -2318,7 +2383,7 @@ function StudyPage() {
                       <div className="text-0\.82 mb-2"><MathText text={sub.question} /></div>
                       {sub.photoUrl && (
                         <div style={{ marginBottom: 8 }}>
-                          <img
+                          <ClickablePhoto
                             src={sub.photoUrl}
                             alt="Respuesta"
                             style={{ maxWidth: '100%', maxHeight: 150, borderRadius: 8, border: '1px solid var(--border)' }}
@@ -2345,7 +2410,7 @@ function StudyPage() {
                       {sub.correctionUrl && (
                         <div style={{ marginBottom: 8 }}>
                           <div className="text-xs text-muted mb-1" style={{ fontWeight: 600 }}>Correccion:</div>
-                          <img
+                          <ClickablePhoto
                             src={sub.correctionUrl}
                             alt="Correccion"
                             style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, border: '1px solid var(--danger)' }}
