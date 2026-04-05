@@ -1012,6 +1012,8 @@ function StudyPage() {
     setPlan(prev => recalculatePlan(prev, currentSubjects))
   }, [setPlan])
 
+  const [submissions, setSubmissions] = useState([])
+
   // Sync plan when block statuses change
   useEffect(() => {
     setPlan(prev => {
@@ -1081,7 +1083,6 @@ function StudyPage() {
   const [showError, setShowError] = useState(true)
   const [selectedPlanTopic, setSelectedPlanTopic] = useState(null)
   const [showCorrections, setShowCorrections] = useState(true)
-  const [submissions, setSubmissions] = useState([])
   const [feedbackText, setFeedbackText] = useState('')
   const [correctionFile, setCorrectionFile] = useState(null)
   const [correctionPreview, setCorrectionPreview] = useState(null)
