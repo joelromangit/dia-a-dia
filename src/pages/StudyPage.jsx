@@ -1656,11 +1656,16 @@ function StudyPage() {
     }
 
     // Store submissions - allow resubmission for rejected exercises
+    // Auto-approve 'auto' exercises (multiple choice, fill blank) since they self-correct
     const newSubmissions = exercisesToSubmit.filter(
       sub => !submissions.some(e => e.exerciseId === sub.exerciseId && e.status === 'pending')
     ).map(sub => {
       const prevAttempts = submissions.filter(e => e.exerciseId === sub.exerciseId)
-      return { ...sub, attempt: prevAttempts.length + 1 }
+      return {
+        ...sub,
+        attempt: prevAttempts.length + 1,
+        status: sub.type === 'auto' ? 'approved' : 'pending',
+      }
     })
     const updatedSubmissions = [...submissions, ...newSubmissions]
     setSubmissions(updatedSubmissions)
@@ -2105,7 +2110,7 @@ function StudyPage() {
                 <ClipboardList size={14} />
                 <span className="section-title">Correcciones</span>
                 <span className="badge badge-primary" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>
-                  {submissions.filter(s => s.status === 'pending' && s.subjectName === detail.name).length}
+                  {submissions.filter(s => s.status === 'pending' && s.type === 'manual' && s.subjectName === detail.name).length}
                 </span>
                 {showCorrections ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </button>
@@ -2113,13 +2118,13 @@ function StudyPage() {
 
             {showCorrections && (
               <div className="px-16" style={{ paddingBottom: 12 }}>
-                {submissions.filter(s => s.subjectName === detail.name).length === 0 && (
+                {submissions.filter(s => s.type === 'manual' && s.subjectName === detail.name).length === 0 && (
                   <div className="text-muted text-center" style={{ padding: '20px 0', fontSize: '0.82rem' }}>
                     Sin ejercicios enviados para corregir.
                   </div>
                 )}
                 {submissions
-                  .filter(s => s.subjectName === detail.name)
+                  .filter(s => s.type === 'manual' && s.subjectName === detail.name)
                   .sort((a, b) => {
                     const order = { pending: 0, approved: 1, rejected: 1 }
                     return (order[a.status] || 0) - (order[b.status] || 0)
