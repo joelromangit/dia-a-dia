@@ -767,7 +767,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
         />
       )}
       <div className="text-0\.85 mb-2"><MathText text={exercise.question} /></div>
-      {photos.length > 0 && (
+      {photos.length > 0 && exercise.status !== 'submitted' && (
         <div style={{ marginBottom: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {photos.map((url, i) => (
             <ClickablePhoto
@@ -914,11 +914,12 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
             {allSubs.map((sub, i) => {
               const color = attemptColors[i % attemptColors.length]
               const isLatest = i === allSubs.length - 1
+              const needsReview = isAdmin && sub.status === 'pending'
               return (
                 <div key={i} style={{
                   marginBottom: 6, padding: '8px 10px', borderRadius: 8,
-                  border: `1px solid ${color}30`,
-                  background: `${color}08`,
+                  border: needsReview ? '2px solid var(--warning)' : `1px solid ${color}30`,
+                  background: needsReview ? 'rgba(253,203,110,0.08)' : `${color}08`,
                   opacity: isLatest ? 1 : 0.7,
                 }}>
                   <div className="flex items-center gap-6">
@@ -930,7 +931,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
                       background: sub.status === 'approved' ? 'rgba(0,206,201,0.15)' : sub.status === 'rejected' ? 'rgba(255,118,117,0.15)' : 'rgba(253,203,110,0.15)',
                       color: sub.status === 'approved' ? 'var(--success)' : sub.status === 'rejected' ? 'var(--danger)' : 'var(--warning)',
                     }}>
-                      {sub.status === 'approved' ? 'Aprobado' : sub.status === 'rejected' ? 'Rechazado' : 'Pendiente'}
+                      {sub.status === 'approved' ? 'Aprobado' : sub.status === 'rejected' ? 'Rechazado' : needsReview ? 'Por revisar' : 'Pendiente'}
                     </span>
                   </div>
                   {sub.feedback && (
@@ -1132,7 +1133,7 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
                 const exSubs = submissions.filter(s => s.exerciseId === ex.id)
                 const latestSub = exSubs.length > 0 ? exSubs[exSubs.length - 1] : null
                 return (
-                <div key={ex.id} style={{ borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
+                <div key={ex.id} id={`exercise-${ex.id}`} style={{ borderTop: i > 0 ? '1px solid var(--border)' : 'none' }}>
                   <div className="flex items-center gap-2" style={{ paddingTop: i > 0 ? 8 : 0 }}>
                     <span className="text-xs text-muted font-600">{i + 1}.</span>
                     {ex.status === 'submitted' && ex.type === 'auto' && <span className="badge badge-success" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Hecho</span>}
@@ -1343,6 +1344,7 @@ function StudyPage() {
   const [showScrollTop, setShowScrollTop] = useState(false)
   const [filterErrors, setFilterErrors] = useState(false)
   const [showHistoricalErrors, setShowHistoricalErrors] = useState(false)
+  const [scrollToExerciseId, setScrollToExerciseId] = useState(null)
 
   // Show scroll-to-top button when user scrolls down in topic view
   useEffect(() => {
@@ -1351,6 +1353,24 @@ function StudyPage() {
     window.addEventListener('scroll', onScroll, { passive: true })
     return () => window.removeEventListener('scroll', onScroll)
   }, [activeTopic])
+
+  // Scroll to specific exercise after topic opens
+  useEffect(() => {
+    if (!scrollToExerciseId || !activeTopic) return
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`exercise-${scrollToExerciseId}`)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        el.style.outline = '2px solid var(--danger)'
+        el.style.outlineOffset = '4px'
+        el.style.borderRadius = '8px'
+        setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = '' }, 3000)
+      }
+      setScrollToExerciseId(null)
+    }, 400)
+    return () => clearTimeout(timer)
+  }, [scrollToExerciseId, activeTopic])
+
   const correctionFileRef = useRef(null)
   const [errors, setErrors] = useState({})
   const [unlockPrompt, setUnlockPrompt] = useState(null) // { type, subjectId, topicIndex?, blockId? }
@@ -1883,7 +1903,7 @@ function StudyPage() {
     }
   }
 
-  const openTopic = (topic, blockId = null) => {
+  const openTopic = (topic, blockId = null, exerciseId = null) => {
     const state = getTopicStateFromLegacy(topic.status)
     if (!isAdmin && state === 'locked') return
     if (state === 'available') {
@@ -1902,6 +1922,7 @@ function StudyPage() {
     }
     setExpandedBlockId(blockId)
     setFilterErrors(false)
+    if (exerciseId) setScrollToExerciseId(exerciseId)
     setActiveTopic(topic)
   }
 
@@ -2110,6 +2131,20 @@ function StudyPage() {
         }))
       }
     }))
+    // Notify teacher via WhatsApp about the retry
+    const subject = subjects.find(s => s.id === activeSubject)
+    if (subject) {
+      for (const t of subject.topics) {
+        for (const b of (t.theoryBlocks || [])) {
+          const ex = (b.exercises || []).find(e => e.id === exerciseId)
+          if (ex) {
+            const prevAttempts = submissions.filter(s => s.exerciseId === exerciseId).length
+            sendWhatsAppNotification(`Reintento (intento ${prevAttempts + 1}) subido en ${t.name} - ${b.title}`)
+            break
+          }
+        }
+      }
+    }
   }
 
   const handleSubmitForReview = (blockId) => {
@@ -2516,6 +2551,54 @@ function StudyPage() {
           </div>
         )}
 
+        {/* Next error navigation button */}
+        {(() => {
+          const errorExIds = allTheoryBlocks.flatMap(b => (b.exercises || []).filter(ex => {
+            if (ex.wrongAnswer !== undefined) return true
+            if (ex.type === 'manual') {
+              const subs = submissions.filter(s => s.exerciseId === ex.id)
+              const latest = subs.length > 0 ? subs[subs.length - 1] : null
+              return latest?.status === 'rejected'
+            }
+            return false
+          }).map(ex => ex.id))
+          if (errorExIds.length === 0) return null
+          return (
+            <button
+              onClick={() => {
+                const scrollY = window.scrollY
+                let nextEl = null
+                for (const id of errorExIds) {
+                  const el = document.getElementById(`exercise-${id}`)
+                  if (el && el.getBoundingClientRect().top > 100) {
+                    nextEl = el
+                    break
+                  }
+                }
+                if (!nextEl && errorExIds.length > 0) {
+                  nextEl = document.getElementById(`exercise-${errorExIds[0]}`)
+                }
+                if (nextEl) {
+                  nextEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                  nextEl.style.outline = '2px solid var(--danger)'
+                  nextEl.style.outlineOffset = '4px'
+                  nextEl.style.borderRadius = '8px'
+                  setTimeout(() => { nextEl.style.outline = ''; nextEl.style.outlineOffset = '' }, 2000)
+                }
+              }}
+              style={{
+                position: 'fixed', bottom: 172, right: 16, zIndex: 50,
+                width: 44, height: 44, borderRadius: '50%',
+                background: 'var(--danger)', color: 'white', border: 'none',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.3)', cursor: 'pointer',
+              }}
+            >
+              <AlertCircle size={18} />
+            </button>
+          )
+        })()}
+
         {showScrollTop && (
           <button
             onClick={() => topicTopRef.current?.scrollIntoView({ behavior: 'smooth' })}
@@ -2890,7 +2973,7 @@ function StudyPage() {
                   <div key={`${err.exerciseId}-${i}`}
                     onClick={() => {
                       const topic = detail.topics.find(t => t.order === err.topicOrder)
-                      if (topic) openTopic(topic, err.blockId)
+                      if (topic) openTopic(topic, err.blockId, err.exerciseId)
                     }}
                     className="cursor-pointer"
                     style={{
@@ -3120,7 +3203,7 @@ function StudyPage() {
                     <div key={`hist-${err.exerciseId}-${err.timestamp}-${i}`}
                       onClick={() => {
                         const topic = detail.topics.find(t => t.order === err.topicOrder) || detail.topics.find(t => t.name === err.topicName)
-                        if (topic) openTopic(topic, err.blockId || null)
+                        if (topic) openTopic(topic, err.blockId || null, err.exerciseId)
                       }}
                       className="cursor-pointer"
                       style={{
