@@ -66,88 +66,14 @@ const COLOR_OPTIONS = ['#ff6b6b', '#51cf66', '#4f8cff', '#ffd43b', '#cc5de8', '#
 const TOPIC_STATES = ['locked', 'available', 'in_progress', 'completed']
 
 function PhotoLightbox({ src, alt, onClose }) {
-  const [scale, setScale] = useState(1)
-  const [translate, setTranslate] = useState({ x: 0, y: 0 })
-  const overlayRef = useRef(null)
-  const lastDist = useRef(null)
-  const lastCenter = useRef(null)
-  const scaleRef = useRef(1)
-
-  useEffect(() => { scaleRef.current = scale }, [scale])
-
-  // Block ALL zoom gestures at document level while lightbox is open
-  useEffect(() => {
-    const prevent = (e) => e.preventDefault()
-    // Safari-specific gesture events (the real cause of native zoom)
-    document.addEventListener('gesturestart', prevent, { passive: false })
-    document.addEventListener('gesturechange', prevent, { passive: false })
-    document.addEventListener('gestureend', prevent, { passive: false })
-    return () => {
-      document.removeEventListener('gesturestart', prevent)
-      document.removeEventListener('gesturechange', prevent)
-      document.removeEventListener('gestureend', prevent)
-    }
-  }, [])
-
-  // Touch handlers for pinch-to-zoom (only zoom in, never below 1x)
-  useEffect(() => {
-    const el = overlayRef.current
-    if (!el) return
-
-    const getDist = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
-    const getMid = (t1, t2) => ({ x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 })
-
-    const onTouchStart = (e) => {
-      if (e.touches.length >= 2) {
-        e.preventDefault()
-        lastDist.current = getDist(e.touches[0], e.touches[1])
-        lastCenter.current = getMid(e.touches[0], e.touches[1])
-      }
-    }
-    const onTouchMove = (e) => {
-      if (e.touches.length >= 2) {
-        e.preventDefault()
-        const dist = getDist(e.touches[0], e.touches[1])
-        const center = getMid(e.touches[0], e.touches[1])
-        if (lastDist.current !== null) {
-          const newScale = Math.min(Math.max(scaleRef.current * (dist / lastDist.current), 1), 5)
-          setScale(newScale)
-          if (lastCenter.current && newScale > 1) {
-            setTranslate(prev => ({
-              x: prev.x + (center.x - lastCenter.current.x),
-              y: prev.y + (center.y - lastCenter.current.y),
-            }))
-          }
-        }
-        lastDist.current = dist
-        lastCenter.current = center
-      }
-    }
-    const onTouchEnd = () => {
-      lastDist.current = null
-      lastCenter.current = null
-      if (scaleRef.current <= 1.05) { setScale(1); setTranslate({ x: 0, y: 0 }) }
-    }
-
-    el.addEventListener('touchstart', onTouchStart, { passive: false })
-    el.addEventListener('touchmove', onTouchMove, { passive: false })
-    el.addEventListener('touchend', onTouchEnd)
-    return () => {
-      el.removeEventListener('touchstart', onTouchStart)
-      el.removeEventListener('touchmove', onTouchMove)
-      el.removeEventListener('touchend', onTouchEnd)
-    }
-  }, [])
-
   return (
     <div
-      ref={overlayRef}
-      onClick={() => onClose()}
+      onClick={onClose}
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         background: 'rgba(0,0,0,0.92)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16, touchAction: 'none', overflow: 'hidden',
+        padding: 16,
       }}
     >
       <button onClick={(e) => { e.stopPropagation(); onClose() }} style={{
@@ -160,12 +86,8 @@ function PhotoLightbox({ src, alt, onClose }) {
       <img
         src={src}
         alt={alt || 'Foto'}
-        style={{
-          maxWidth: '100%', maxHeight: '90vh', borderRadius: 8, objectFit: 'contain',
-          transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
-          transition: lastDist.current !== null ? 'none' : 'transform 0.2s ease',
-          pointerEvents: 'none',
-        }}
+        onClick={e => e.stopPropagation()}
+        style={{ maxWidth: '100%', maxHeight: '90vh', borderRadius: 8, objectFit: 'contain' }}
       />
     </div>
   )
