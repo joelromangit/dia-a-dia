@@ -70,7 +70,6 @@ const TOPIC_STATES = ['locked', 'available', 'in_progress', 'completed']
 // Crop helper: creates a cropped image File from crop area
 async function getCroppedImg(imageSrc, pixelCrop) {
   const img = new Image()
-  img.crossOrigin = 'anonymous'
   await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = imageSrc })
   const canvas = document.createElement('canvas')
   canvas.width = pixelCrop.width
@@ -84,15 +83,31 @@ async function getCroppedImg(imageSrc, pixelCrop) {
   })
 }
 
-function CropModal({ imageSrc, onConfirm, onCancel }) {
+function CropModal({ imageSrc, originalFile, onConfirm, onCancel }) {
   const [crop, setCrop] = useState({ x: 0, y: 0 })
   const [zoom, setZoom] = useState(1)
   const [croppedArea, setCroppedArea] = useState(null)
+  const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     document.body.style.overflow = 'hidden'
     return () => { document.body.style.overflow = '' }
   }, [])
+
+  const handleCrop = async () => {
+    if (loading) return
+    setLoading(true)
+    try {
+      if (croppedArea && croppedArea.width > 0 && croppedArea.height > 0) {
+        const file = await getCroppedImg(imageSrc, croppedArea)
+        onConfirm(file)
+      } else {
+        onConfirm(originalFile)
+      }
+    } catch {
+      onConfirm(originalFile)
+    }
+  }
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.95)', display: 'flex', flexDirection: 'column' }}>
@@ -107,24 +122,26 @@ function CropModal({ imageSrc, onConfirm, onCancel }) {
           onCropComplete={(_, area) => setCroppedArea(area)}
         />
       </div>
-      <div style={{ padding: '12px 16px', display: 'flex', gap: 12, background: 'var(--bg)' }}>
-        <button
-          className="btn btn-outline btn-block"
-          onClick={onCancel}
-        >
-          Cancelar
-        </button>
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg)' }}>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button className="btn btn-outline btn-block" onClick={onCancel}>
+            Cancelar
+          </button>
+          <button
+            className="btn btn-block border-none"
+            style={{ background: 'var(--primary)', color: 'white' }}
+            disabled={loading}
+            onClick={handleCrop}
+          >
+            <Check size={16} /> {loading ? 'Procesando...' : 'Recortar'}
+          </button>
+        </div>
         <button
           className="btn btn-block border-none"
-          style={{ background: 'var(--primary)', color: 'white' }}
-          onClick={async () => {
-            if (croppedArea) {
-              const file = await getCroppedImg(imageSrc, croppedArea)
-              onConfirm(file)
-            }
-          }}
+          style={{ background: 'var(--bg-card)', color: 'var(--text)', fontSize: '0.8rem' }}
+          onClick={() => onConfirm(originalFile)}
         >
-          <Check size={16} /> Recortar
+          Usar imagen entera
         </button>
       </div>
     </div>
@@ -732,7 +749,8 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
   const [feedback, setFeedback] = useState('')
   const [corrFile, setCorrFile] = useState(null)
   const [corrPreview, setCorrPreview] = useState(null)
-  const [cropSrc, setCropSrc] = useState(null) // image to crop
+  const [cropSrc, setCropSrc] = useState(null) // image URL to crop
+  const [cropFile, setCropFile] = useState(null) // original file for "use full image"
   const [cropAction, setCropAction] = useState(null) // 'upload' | 'retry' | 'correction'
   const isDone = exercise.status === 'done' || exercise.status === 'submitted'
   const allSubs = submissions.filter(s => s.exerciseId === exercise.id)
@@ -746,14 +764,16 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
   const handleFileSelected = (file, action) => {
     const url = URL.createObjectURL(file)
     setCropSrc(url)
+    setCropFile(file)
     setCropAction(action)
   }
 
-  const handleCropConfirm = (croppedFile) => {
-    if (cropAction === 'upload') onPhotoUpload(exercise.id, croppedFile)
-    else if (cropAction === 'retry') onRetryUpload(exercise.id, croppedFile)
-    else if (cropAction === 'correction') { setCorrFile(croppedFile); setCorrPreview(URL.createObjectURL(croppedFile)) }
+  const handleCropConfirm = (file) => {
+    if (cropAction === 'upload') onPhotoUpload(exercise.id, file)
+    else if (cropAction === 'retry') onRetryUpload(exercise.id, file)
+    else if (cropAction === 'correction') { setCorrFile(file); setCorrPreview(URL.createObjectURL(file)) }
     setCropSrc(null)
+    setCropFile(null)
     setCropAction(null)
   }
 
@@ -762,8 +782,9 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
       {cropSrc && (
         <CropModal
           imageSrc={cropSrc}
+          originalFile={cropFile}
           onConfirm={handleCropConfirm}
-          onCancel={() => { setCropSrc(null); setCropAction(null) }}
+          onCancel={() => { setCropSrc(null); setCropFile(null); setCropAction(null) }}
         />
       )}
       <div className="text-0\.85 mb-2"><MathText text={exercise.question} /></div>
