@@ -859,7 +859,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
                     className="btn btn-sm flex-1"
                     style={{ background: 'rgba(0,206,201,0.15)', color: 'var(--success)', border: 'none', justifyContent: 'center' }}
                     onClick={() => {
-                      onCorrect(exercise.id, latestSub.timestamp, 'approved', feedback, null)
+                      onCorrect(exercise.id, latestSub.timestamp, 'approved', feedback, corrFile)
                       setFeedback('')
                       setCorrFile(null)
                       setCorrPreview(null)
@@ -1344,6 +1344,9 @@ function StudyPage() {
   const [showScrollTop, setShowScrollTop] = useState(false)
   const [filterErrors, setFilterErrors] = useState(false)
   const [showHistoricalErrors, setShowHistoricalErrors] = useState(false)
+  const [dismissedAnnotations, setDismissedAnnotations] = useState([])
+  const [showHistoricalAnnotations, setShowHistoricalAnnotations] = useState(false)
+  const [showTeacherReview, setShowTeacherReview] = useState(false)
   const [scrollToExerciseId, setScrollToExerciseId] = useState(null)
 
   // Show scroll-to-top button when user scrolls down in topic view
@@ -1400,6 +1403,10 @@ function StudyPage() {
       const savedErrors = await appStateDb.get('study_errors')
       if (savedErrors) {
         setStudyErrors(savedErrors)
+      }
+      const savedDismissed = await appStateDb.get('study_dismissed_annotations')
+      if (savedDismissed) {
+        setDismissedAnnotations(savedDismissed)
       }
       // Select today if it has plan entries
       const today = formatDate(new Date())
@@ -3011,6 +3018,92 @@ function StudyPage() {
           )
         })()}
 
+        {/* Annotations from teacher on approved exercises (not dismissed) */}
+        {(() => {
+          const annotations = []
+          for (const t of detail.topics || []) {
+            for (const b of t.theoryBlocks || []) {
+              for (const ex of b.exercises || []) {
+                if (ex.type !== 'manual') continue
+                const subs = submissions.filter(s => s.exerciseId === ex.id)
+                const latest = subs.length > 0 ? subs[subs.length - 1] : null
+                if (latest?.status === 'approved' && (latest.feedback || latest.correctionUrl)) {
+                  const key = `${ex.id}-${latest.timestamp}`
+                  if (dismissedAnnotations.includes(key)) continue
+                  annotations.push({
+                    key,
+                    exerciseId: ex.id,
+                    question: ex.question || ex.title || `Ejercicio ${ex.id}`,
+                    topicName: t.name,
+                    topicOrder: t.order,
+                    blockId: b.id,
+                    blockTitle: b.title,
+                    feedback: latest.feedback,
+                    correctionUrl: latest.correctionUrl,
+                    timestamp: latest.timestamp,
+                  })
+                }
+              }
+            }
+          }
+          if (annotations.length === 0) return null
+          return (
+            <>
+              <div className="section-header">
+                <span className="section-title flex items-center gap-6">
+                  <MessageSquare size={14} style={{ color: 'var(--primary-light)' }} />
+                  Anotaciones del profesor ({annotations.length})
+                </span>
+              </div>
+              <div className="px-16" style={{ paddingBottom: 8 }}>
+                {annotations.map((ann, i) => (
+                  <div key={ann.key} style={{
+                    padding: '10px 12px', marginBottom: 6, borderRadius: 10,
+                    background: 'rgba(108,92,231,0.06)', border: '1px solid rgba(108,92,231,0.2)',
+                  }}>
+                    <div className="flex items-center gap-6" style={{ marginBottom: 4 }}>
+                      <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--success)' }}>
+                        Aprobado
+                      </span>
+                      <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                        {ann.topicName} &middot; {ann.blockTitle}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text)', marginBottom: 4, cursor: 'pointer' }}
+                      onClick={() => {
+                        const topic = detail.topics.find(t => t.order === ann.topicOrder)
+                        if (topic) openTopic(topic, ann.blockId, ann.exerciseId)
+                      }}>
+                      <MathText text={ann.question} />
+                      <ChevronRight size={12} style={{ display: 'inline', marginLeft: 4, color: 'var(--text-muted)' }} />
+                    </div>
+                    {ann.feedback && (
+                      <div style={{ fontSize: '0.75rem', padding: '4px 8px', borderRadius: 6, background: 'rgba(108,92,231,0.1)', color: 'var(--primary-light)', marginBottom: 4 }}>
+                        <MessageSquare size={10} style={{ display: 'inline', marginRight: 4 }} />
+                        {ann.feedback}
+                      </div>
+                    )}
+                    {ann.correctionUrl && (
+                      <ClickablePhoto src={ann.correctionUrl} alt="Correccion" style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid var(--primary-light)', marginBottom: 4 }} />
+                    )}
+                    <button
+                      className="btn btn-sm w-full"
+                      style={{ background: 'rgba(0,206,201,0.12)', color: 'var(--success)', border: 'none', justifyContent: 'center', fontSize: '0.72rem', marginTop: 4 }}
+                      onClick={() => {
+                        const updated = [...dismissedAnnotations, ann.key]
+                        setDismissedAnnotations(updated)
+                        appStateDb.set('study_dismissed_annotations', updated)
+                      }}
+                    >
+                      <Check size={12} /> Visto
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )
+        })()}
+
         <div className="section-header">
           <span className="section-title">Temario</span>
         </div>
@@ -3241,6 +3334,177 @@ function StudyPage() {
                           {err.feedback}
                         </div>
                       )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )
+        })()}
+
+        {/* Historical annotations (all dismissed + current) */}
+        {(() => {
+          const allAnnotations = []
+          for (const t of detail.topics || []) {
+            for (const b of t.theoryBlocks || []) {
+              for (const ex of b.exercises || []) {
+                if (ex.type !== 'manual') continue
+                const subs = submissions.filter(s => s.exerciseId === ex.id)
+                subs.forEach(sub => {
+                  if (sub.status === 'approved' && (sub.feedback || sub.correctionUrl)) {
+                    allAnnotations.push({
+                      exerciseId: ex.id,
+                      question: ex.question || ex.title || `Ejercicio ${ex.id}`,
+                      topicName: t.name,
+                      topicOrder: t.order,
+                      blockId: b.id,
+                      blockTitle: b.title,
+                      feedback: sub.feedback,
+                      correctionUrl: sub.correctionUrl,
+                      timestamp: sub.timestamp,
+                    })
+                  }
+                })
+              }
+            }
+          }
+          if (allAnnotations.length === 0) return null
+          allAnnotations.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          return (
+            <>
+              <div className="section-header" style={{ cursor: 'pointer' }} onClick={() => setShowHistoricalAnnotations(prev => !prev)}>
+                <span className="section-title flex items-center gap-6">
+                  <MessageSquare size={14} style={{ color: 'var(--primary-light)' }} />
+                  Historial de anotaciones ({allAnnotations.length})
+                </span>
+                {showHistoricalAnnotations ? <ChevronUp size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} />}
+              </div>
+              {showHistoricalAnnotations && (
+                <div className="px-16" style={{ paddingBottom: 8 }}>
+                  {allAnnotations.map((ann, i) => (
+                    <div key={`ann-${ann.exerciseId}-${ann.timestamp}-${i}`}
+                      onClick={() => {
+                        const topic = detail.topics.find(t => t.order === ann.topicOrder)
+                        if (topic) openTopic(topic, ann.blockId, ann.exerciseId)
+                      }}
+                      className="cursor-pointer"
+                      style={{
+                        padding: '8px 12px', marginBottom: 4, borderRadius: 8,
+                        background: 'var(--bg-card)', border: '1px solid var(--border)',
+                      }}>
+                      <div className="flex items-center gap-6" style={{ marginBottom: 3 }}>
+                        <span style={{ fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--success)' }}>Aprobado</span>
+                        <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                          {ann.topicName} &middot; {ann.blockTitle}
+                        </span>
+                        <ChevronRight size={12} style={{ marginLeft: 'auto', color: 'var(--text-muted)' }} />
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text)' }}>
+                        <MathText text={ann.question} />
+                      </div>
+                      {ann.feedback && (
+                        <div style={{ fontSize: '0.72rem', padding: '3px 6px', marginTop: 3, borderRadius: 4, background: 'rgba(108,92,231,0.1)', color: 'var(--primary-light)' }}>
+                          <MessageSquare size={9} style={{ display: 'inline', marginRight: 3 }} />
+                          {ann.feedback}
+                        </div>
+                      )}
+                      {ann.correctionUrl && (
+                        <div style={{ fontSize: '0.65rem', color: 'var(--primary-light)', marginTop: 3 }}>
+                          <Image size={9} style={{ display: 'inline', marginRight: 3 }} />
+                          Foto adjunta
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )
+        })()}
+
+        {/* Teacher review: all corrected exercises */}
+        {isAdmin && (() => {
+          const allCorrected = []
+          for (const t of detail.topics || []) {
+            for (const b of t.theoryBlocks || []) {
+              for (const ex of b.exercises || []) {
+                if (ex.type !== 'manual') continue
+                const subs = submissions.filter(s => s.exerciseId === ex.id)
+                subs.forEach(sub => {
+                  if (sub.status === 'approved' || sub.status === 'rejected') {
+                    allCorrected.push({
+                      exerciseId: ex.id,
+                      question: ex.question || ex.title || `Ejercicio ${ex.id}`,
+                      topicName: t.name,
+                      topicOrder: t.order,
+                      blockId: b.id,
+                      blockTitle: b.title,
+                      status: sub.status,
+                      feedback: sub.feedback,
+                      correctionUrl: sub.correctionUrl,
+                      attempt: sub.attempt || 1,
+                      timestamp: sub.timestamp,
+                    })
+                  }
+                })
+              }
+            }
+          }
+          if (allCorrected.length === 0) return null
+          allCorrected.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          const approved = allCorrected.filter(c => c.status === 'approved')
+          const rejected = allCorrected.filter(c => c.status === 'rejected')
+          return (
+            <>
+              <div className="section-header" style={{ cursor: 'pointer' }} onClick={() => setShowTeacherReview(prev => !prev)}>
+                <span className="section-title flex items-center gap-6">
+                  <ClipboardList size={14} style={{ color: 'var(--primary-light)' }} />
+                  Mis correcciones ({allCorrected.length})
+                </span>
+                {showTeacherReview ? <ChevronUp size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} />}
+              </div>
+              {showTeacherReview && (
+                <div className="px-16" style={{ paddingBottom: 8 }}>
+                  {approved.length > 0 && (
+                    <div className="text-xs font-700 text-uppercase tracking-wide mb-1" style={{ color: 'var(--success)', fontSize: '0.65rem' }}>
+                      Aprobados con anotaciones ({approved.filter(c => c.feedback || c.correctionUrl).length}) / Sin anotaciones ({approved.filter(c => !c.feedback && !c.correctionUrl).length})
+                    </div>
+                  )}
+                  {approved.filter(c => c.feedback || c.correctionUrl).map((c, i) => (
+                    <div key={`rev-a-${c.exerciseId}-${c.timestamp}-${i}`}
+                      onClick={() => {
+                        const topic = detail.topics.find(t => t.order === c.topicOrder)
+                        if (topic) openTopic(topic, c.blockId, c.exerciseId)
+                      }}
+                      className="cursor-pointer"
+                      style={{ padding: '6px 10px', marginBottom: 3, borderRadius: 6, background: 'rgba(0,206,201,0.06)', border: '1px solid rgba(0,206,201,0.15)' }}>
+                      <div className="flex items-center gap-4">
+                        <CheckCircle size={10} style={{ color: 'var(--success)', flexShrink: 0 }} />
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text)', flex: 1 }}><MathText text={c.question} /></span>
+                        <ChevronRight size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                      </div>
+                      {c.feedback && <div style={{ fontSize: '0.68rem', color: 'var(--primary-light)', marginTop: 2, paddingLeft: 18 }}>{c.feedback}</div>}
+                    </div>
+                  ))}
+                  {rejected.length > 0 && (
+                    <div className="text-xs font-700 text-uppercase tracking-wide mb-1 mt-2" style={{ color: 'var(--danger)', fontSize: '0.65rem' }}>
+                      Rechazados ({rejected.length})
+                    </div>
+                  )}
+                  {rejected.map((c, i) => (
+                    <div key={`rev-r-${c.exerciseId}-${c.timestamp}-${i}`}
+                      onClick={() => {
+                        const topic = detail.topics.find(t => t.order === c.topicOrder)
+                        if (topic) openTopic(topic, c.blockId, c.exerciseId)
+                      }}
+                      className="cursor-pointer"
+                      style={{ padding: '6px 10px', marginBottom: 3, borderRadius: 6, background: 'rgba(255,118,117,0.06)', border: '1px solid rgba(255,118,117,0.15)' }}>
+                      <div className="flex items-center gap-4">
+                        <X size={10} style={{ color: 'var(--danger)', flexShrink: 0 }} />
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text)', flex: 1 }}><MathText text={c.question} /></span>
+                        <ChevronRight size={12} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+                      </div>
+                      {c.feedback && <div style={{ fontSize: '0.68rem', color: 'var(--danger)', marginTop: 2, paddingLeft: 18 }}>{c.feedback}</div>}
                     </div>
                   ))}
                 </div>
