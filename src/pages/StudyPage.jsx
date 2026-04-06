@@ -788,27 +788,9 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
             <span className={`text-xs font-600 ${isRejected ? 'text-danger' : isApproved ? 'text-success' : 'text-primary-light'}`}>
               {isRejected ? 'Rechazado' : isApproved ? 'Corregido' : 'Enviado para correccion'}
             </span>
-            {allSubs.length > 1 && <span className="text-xs text-muted">(Intento {allSubs.length})</span>}
           </div>
-          {latestSub?.feedback && (
-            <div className="text-xs mt-1" style={{
-              padding: '6px 8px',
-              borderRadius: 6,
-              background: isApproved ? 'rgba(0,206,201,0.08)' : 'rgba(255,118,117,0.08)',
-              color: isApproved ? 'var(--success)' : 'var(--danger)',
-            }}>
-              <MessageSquare size={10} style={{ display: 'inline', marginRight: 4 }} />
-              {latestSub.feedback}
-            </div>
-          )}
-          {latestSub?.correctionUrl && (
-            <div style={{ marginTop: 6 }}>
-              <div className="text-xs text-muted mb-1" style={{ fontWeight: 600 }}>Correccion:</div>
-              <ClickablePhoto src={latestSub.correctionUrl} alt="Correccion" style={{ maxWidth: '100%', maxHeight: 150, borderRadius: 8, border: '1px solid var(--danger)' }} />
-            </div>
-          )}
-          {/* Student actions: change/delete photo */}
-          {!isAdmin && (
+          {/* Student actions: only on rejected (not approved) */}
+          {!isAdmin && isRejected && (
             <div style={{ marginTop: 8 }} className="flex gap-6">
               <input
                 ref={retryFileRef}
@@ -826,15 +808,14 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
                 style={{ background: 'rgba(108,92,231,0.15)', color: 'var(--primary-light)', border: 'none' }}
                 onClick={() => retryFileRef.current?.click()}
               >
-                <Camera size={14} /> Cambiar foto
+                <Camera size={14} /> Volver a intentar
               </button>
-              <button
-                className="btn btn-sm"
-                style={{ background: 'rgba(255,118,117,0.15)', color: 'var(--danger)', border: 'none' }}
-                onClick={() => onDeletePhoto(exercise.id)}
-              >
-                <Trash2 size={14} /> Borrar
-              </button>
+            </div>
+          )}
+          {/* Student: pending review, no actions */}
+          {!isAdmin && isPendingReview && (
+            <div className="text-xs text-muted mt-1" style={{ fontStyle: 'italic' }}>
+              Esperando correccion del profesor...
             </div>
           )}
           {/* Admin correction UI */}
@@ -924,30 +905,55 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
           )}
         </div>
       )}
-      {/* Show previous attempts */}
-      {allSubs.length > 1 && (
-        <details style={{ marginTop: 6 }}>
-          <summary className="text-xs text-muted cursor-pointer" style={{ fontWeight: 600 }}>
-            Ver {allSubs.length - 1} intento{allSubs.length > 2 ? 's' : ''} anterior{allSubs.length > 2 ? 'es' : ''}
-          </summary>
-          <div style={{ marginTop: 6, paddingLeft: 8, borderLeft: '2px solid var(--border)' }}>
-            {allSubs.slice(0, -1).map((sub, i) => (
-              <div key={i} style={{ marginBottom: 8, fontSize: '0.75rem' }}>
-                <div className="flex items-center gap-1">
-                  <span className="text-muted">Intento {sub.attempt || i + 1}</span>
-                  <span className={`badge ${sub.status === 'approved' ? 'badge-success' : sub.status === 'rejected' ? 'badge-danger' : 'badge-warning'}`} style={{ fontSize: '0.55rem', padding: '1px 4px' }}>
-                    {sub.status === 'approved' ? 'Aprobado' : sub.status === 'rejected' ? 'Rechazado' : 'Pendiente'}
-                  </span>
+      {/* Show all attempts with distinct colors */}
+      {allSubs.length > 0 && (() => {
+        const attemptColors = ['#4f8cff', '#ff922b', '#cc5de8', '#20c997', '#ffd43b']
+        const attemptLabels = ['Primer intento', 'Segundo intento', 'Tercer intento', 'Cuarto intento', 'Quinto intento']
+        return (
+          <div style={{ marginTop: 8 }}>
+            {allSubs.map((sub, i) => {
+              const color = attemptColors[i % attemptColors.length]
+              const isLatest = i === allSubs.length - 1
+              return (
+                <div key={i} style={{
+                  marginBottom: 6, padding: '8px 10px', borderRadius: 8,
+                  border: `1px solid ${color}30`,
+                  background: `${color}08`,
+                  opacity: isLatest ? 1 : 0.7,
+                }}>
+                  <div className="flex items-center gap-6">
+                    <span style={{ fontSize: '0.68rem', fontWeight: 700, color }}>
+                      {attemptLabels[i] || `Intento ${i + 1}`}
+                    </span>
+                    <span style={{
+                      fontSize: '0.55rem', fontWeight: 700, padding: '1px 6px', borderRadius: 6,
+                      background: sub.status === 'approved' ? 'rgba(0,206,201,0.15)' : sub.status === 'rejected' ? 'rgba(255,118,117,0.15)' : 'rgba(253,203,110,0.15)',
+                      color: sub.status === 'approved' ? 'var(--success)' : sub.status === 'rejected' ? 'var(--danger)' : 'var(--warning)',
+                    }}>
+                      {sub.status === 'approved' ? 'Aprobado' : sub.status === 'rejected' ? 'Rechazado' : 'Pendiente'}
+                    </span>
+                  </div>
+                  {sub.feedback && (
+                    <div style={{ fontSize: '0.72rem', marginTop: 4, padding: '3px 6px', borderRadius: 4, background: 'rgba(108,92,231,0.1)', color: 'var(--primary-light)' }}>
+                      <MessageSquare size={9} style={{ display: 'inline', marginRight: 3 }} />
+                      {sub.feedback}
+                    </div>
+                  )}
+                  {sub.photoUrl && (
+                    <ClickablePhoto src={sub.photoUrl} alt={`Intento ${i + 1}`} style={{ maxWidth: '100%', maxHeight: isLatest ? 150 : 80, borderRadius: 6, marginTop: 4, opacity: isLatest ? 1 : 0.6 }} />
+                  )}
+                  {sub.correctionUrl && (
+                    <div style={{ marginTop: 4 }}>
+                      <div className="text-xs" style={{ fontWeight: 600, color: 'var(--primary-light)', marginBottom: 2, fontSize: '0.65rem' }}>Correccion del profesor:</div>
+                      <ClickablePhoto src={sub.correctionUrl} alt="Correccion" style={{ maxWidth: '100%', maxHeight: isLatest ? 120 : 60, borderRadius: 6, border: '1px solid var(--danger)', opacity: isLatest ? 1 : 0.6 }} />
+                    </div>
+                  )}
                 </div>
-                {sub.feedback && <div className="text-xs text-muted mt-1">{sub.feedback}</div>}
-                {sub.photoUrl && (
-                  <ClickablePhoto src={sub.photoUrl} alt={`Intento ${i + 1}`} style={{ maxWidth: '100%', maxHeight: 100, borderRadius: 6, marginTop: 4, opacity: 0.7 }} />
-                )}
-              </div>
-            ))}
+              )
+            })}
           </div>
-        </details>
-      )}
+        )
+      })()}
       {photos.length < 3 && exercise.status !== 'submitted' && (
         <>
           <input
@@ -1335,6 +1341,8 @@ function StudyPage() {
   const [correctionPreview, setCorrectionPreview] = useState(null)
   const topicTopRef = useRef(null)
   const [showScrollTop, setShowScrollTop] = useState(false)
+  const [filterErrors, setFilterErrors] = useState(false)
+  const [showHistoricalErrors, setShowHistoricalErrors] = useState(false)
 
   // Show scroll-to-top button when user scrolls down in topic view
   useEffect(() => {
@@ -1893,6 +1901,7 @@ function StudyPage() {
       if (topic.id) studyDb.updateTopic(topic.id, { status: 'in_progress' })
     }
     setExpandedBlockId(blockId)
+    setFilterErrors(false)
     setActiveTopic(topic)
   }
 
@@ -1934,6 +1943,8 @@ function StudyPage() {
                 type: ex.autoConfig?.type || 'auto',
                 subjectName: subject.name,
                 topicName: t.name,
+                topicOrder: t.order,
+                blockId: b.id,
                 blockTitle: b.title,
                 timestamp: new Date().toISOString(),
               }
@@ -2082,7 +2093,7 @@ function StudyPage() {
     if (!photoUrl) {
       photoUrl = URL.createObjectURL(file)
     }
-    // Set exercise back to 'done' with new photos so it can be re-submitted
+    // Set exercise back to 'done' with new photo (keep existing photos from previous attempts)
     setSubjects(prev => prev.map(s => {
       if (s.id !== activeSubject) return s
       return {
@@ -2091,17 +2102,14 @@ function StudyPage() {
           ...t,
           theoryBlocks: (t.theoryBlocks || []).map(b => ({
             ...b,
-            exercises: (b.exercises || []).map(ex =>
-              ex.id === exerciseId ? { ...ex, status: 'done', photoUrl, photoUrls: [photoUrl] } : ex
-            )
+            exercises: (b.exercises || []).map(ex => {
+              if (ex.id !== exerciseId) return ex
+              return { ...ex, status: 'done', photoUrl, photoUrls: [photoUrl] }
+            })
           }))
         }))
       }
     }))
-    // Remove pending submission so it can be re-submitted with new photo
-    const updatedSubs = submissions.filter(s => !(s.exerciseId === exerciseId && s.status === 'pending'))
-    setSubmissions(updatedSubs)
-    appStateDb.set('study_submissions', updatedSubs)
   }
 
   const handleSubmitForReview = (blockId) => {
@@ -2213,7 +2221,18 @@ function StudyPage() {
   if (detail && currentTopicData) {
     const Icon = ICONS[detail.icon] || Calculator
     const topicState = getTopicStateFromLegacy(currentTopicData.status)
-    const theoryBlocks = currentTopicData.theoryBlocks || []
+    const allTheoryBlocks = currentTopicData.theoryBlocks || []
+    const theoryBlocks = filterErrors
+      ? allTheoryBlocks.filter(b => (b.exercises || []).some(ex => {
+          if (ex.wrongAnswer !== undefined) return true
+          if (ex.type === 'manual') {
+            const subs = submissions.filter(s => s.exerciseId === ex.id)
+            const latest = subs.length > 0 ? subs[subs.length - 1] : null
+            return latest?.status === 'rejected'
+          }
+          return false
+        }))
+      : allTheoryBlocks
 
     return (
       <div className="study-topic-view">
@@ -2291,6 +2310,36 @@ function StudyPage() {
               )
             })() : null}
           </div>
+          {/* Error filter toggle */}
+          {(() => {
+            const hasErrors = allTheoryBlocks.some(b => (b.exercises || []).some(ex => {
+              if (ex.wrongAnswer !== undefined) return true
+              if (ex.type === 'manual') {
+                const subs = submissions.filter(s => s.exerciseId === ex.id)
+                const latest = subs.length > 0 ? subs[subs.length - 1] : null
+                return latest?.status === 'rejected'
+              }
+              return false
+            }))
+            if (!hasErrors) return null
+            return (
+              <div style={{ padding: '0 16px', marginTop: 4 }}>
+                <button
+                  className="btn btn-sm w-full"
+                  style={{
+                    background: filterErrors ? 'rgba(255,118,117,0.15)' : 'var(--bg-card)',
+                    color: filterErrors ? 'var(--danger)' : 'var(--text-muted)',
+                    border: filterErrors ? '1px solid var(--danger)' : '1px solid var(--border)',
+                    fontSize: '0.72rem', justifyContent: 'center',
+                  }}
+                  onClick={() => setFilterErrors(prev => !prev)}
+                >
+                  <AlertCircle size={12} />
+                  {filterErrors ? 'Ver todos los bloques' : 'Solo ejercicios con errores'}
+                </button>
+              </div>
+            )
+          })()}
         </div>
 
         <div style={{ padding: '16px 16px 0' }}>
@@ -2471,7 +2520,7 @@ function StudyPage() {
           <button
             onClick={() => topicTopRef.current?.scrollIntoView({ behavior: 'smooth' })}
             style={{
-              position: 'fixed', bottom: 80, right: 16, zIndex: 50,
+              position: 'fixed', bottom: 126, right: 16, zIndex: 50,
               width: 44, height: 44, borderRadius: '50%',
               background: detail.color, color: 'white', border: 'none',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -2802,10 +2851,9 @@ function StudyPage() {
           </>
         )}
 
+        {/* Pending corrections - rejected exercises that need student action */}
         {(() => {
-          // Collect all errors for this subject
-          const subjectAutoErrors = studyErrors.filter(e => e.subjectName === detail.name)
-          const subjectRejected = []
+          const pendingCorrections = []
           for (const t of detail.topics || []) {
             for (const b of t.theoryBlocks || []) {
               for (const ex of b.exercises || []) {
@@ -2813,62 +2861,64 @@ function StudyPage() {
                 const subs = submissions.filter(s => s.exerciseId === ex.id)
                 const latest = subs.length > 0 ? subs[subs.length - 1] : null
                 if (latest?.status === 'rejected') {
-                  subjectRejected.push({
+                  pendingCorrections.push({
                     exerciseId: ex.id,
                     question: ex.question || ex.title || `Ejercicio ${ex.id}`,
-                    type: 'manual',
-                    subjectName: detail.name,
                     topicName: t.name,
+                    topicOrder: t.order,
+                    blockId: b.id,
                     blockTitle: b.title,
                     feedback: latest.feedback,
+                    correctionUrl: latest.correctionUrl,
                     timestamp: latest.timestamp,
                   })
                 }
               }
             }
           }
-          const allErrors = [...subjectAutoErrors, ...subjectRejected].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-          if (allErrors.length === 0) return null
+          if (pendingCorrections.length === 0) return null
           return (
             <>
               <div className="section-header">
                 <span className="section-title flex items-center gap-6">
                   <AlertCircle size={14} style={{ color: 'var(--danger)' }} />
-                  Errores cometidos ({allErrors.length})
+                  Pendientes de corregir ({pendingCorrections.length})
                 </span>
               </div>
               <div className="px-16" style={{ paddingBottom: 8 }}>
-                {allErrors.map((err, i) => (
-                  <div key={`${err.exerciseId}-${err.timestamp}-${i}`} style={{
-                    padding: '10px 12px', marginBottom: 6, borderRadius: 10,
-                    background: 'rgba(255,118,117,0.08)', border: '1px solid rgba(255,118,117,0.2)',
-                  }}>
+                {pendingCorrections.map((err, i) => (
+                  <div key={`${err.exerciseId}-${i}`}
+                    onClick={() => {
+                      const topic = detail.topics.find(t => t.order === err.topicOrder)
+                      if (topic) openTopic(topic, err.blockId)
+                    }}
+                    className="cursor-pointer"
+                    style={{
+                      padding: '10px 12px', marginBottom: 6, borderRadius: 10,
+                      background: 'rgba(255,118,117,0.08)', border: '1px solid rgba(255,118,117,0.2)',
+                    }}>
                     <div className="flex items-center gap-6" style={{ marginBottom: 4 }}>
-                      <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: err.type === 'manual' ? 'var(--danger)' : '#f59e0b' }}>
-                        {err.type === 'manual' ? 'Rechazado' : err.type === 'multiple_choice' ? 'Test' : 'Respuesta'}
+                      <span style={{ fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--danger)' }}>
+                        Rechazado
                       </span>
                       <span style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
                         {err.topicName} &middot; {err.blockTitle}
                       </span>
+                      <ChevronRight size={12} style={{ marginLeft: 'auto', color: 'var(--text-muted)' }} />
                     </div>
                     <div style={{ fontSize: '0.82rem', color: 'var(--text)', marginBottom: 4 }}>
                       <MathText text={err.question} />
                     </div>
-                    {err.type !== 'manual' && (
-                      <div className="flex gap-8" style={{ fontSize: '0.75rem' }}>
-                        <span style={{ color: 'var(--danger)' }}>
-                          Tu respuesta: <strong>{typeof err.wrongAnswer === 'number'
-                            ? String.fromCharCode(65 + err.wrongAnswer)
-                            : String(err.wrongAnswer)}</strong>
-                        </span>
-                        <span style={{ color: 'var(--success)' }}>
-                          Correcta: <strong>{String(err.correctAnswer)}</strong>
-                        </span>
+                    {err.feedback && (
+                      <div style={{ fontSize: '0.75rem', padding: '4px 8px', marginTop: 4, borderRadius: 6, background: 'rgba(108,92,231,0.1)', color: 'var(--primary-light)' }}>
+                        <MessageSquare size={10} style={{ display: 'inline', marginRight: 4 }} />
+                        Anotacion: {err.feedback}
                       </div>
                     )}
-                    {err.type === 'manual' && err.feedback && (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-                        Feedback: {err.feedback}
+                    {err.correctionUrl && (
+                      <div style={{ fontSize: '0.7rem', color: 'var(--primary-light)', marginTop: 4 }}>
+                        <Image size={10} style={{ display: 'inline', marginRight: 4 }} />
+                        Correccion adjunta del profesor
                       </div>
                     )}
                   </div>
@@ -3025,6 +3075,96 @@ function StudyPage() {
             )
           })}
         </div>
+
+        {/* Historical errors section */}
+        {(() => {
+          const subjectAutoErrors = studyErrors.filter(e => e.subjectName === detail.name)
+          const subjectManualErrors = []
+          for (const t of detail.topics || []) {
+            for (const b of t.theoryBlocks || []) {
+              for (const ex of b.exercises || []) {
+                if (ex.type !== 'manual') continue
+                const subs = submissions.filter(s => s.exerciseId === ex.id)
+                const rejectedSubs = subs.filter(s => s.status === 'rejected')
+                rejectedSubs.forEach(sub => {
+                  subjectManualErrors.push({
+                    exerciseId: ex.id,
+                    question: ex.question || ex.title || `Ejercicio ${ex.id}`,
+                    type: 'manual',
+                    topicName: t.name,
+                    topicOrder: t.order,
+                    blockId: b.id,
+                    blockTitle: b.title,
+                    feedback: sub.feedback,
+                    correctionUrl: sub.correctionUrl,
+                    timestamp: sub.timestamp,
+                  })
+                })
+              }
+            }
+          }
+          const allHistorical = [...subjectAutoErrors, ...subjectManualErrors].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+          if (allHistorical.length === 0) return null
+          return (
+            <>
+              <div className="section-header" style={{ cursor: 'pointer' }} onClick={() => setShowHistoricalErrors(prev => !prev)}>
+                <span className="section-title flex items-center gap-6">
+                  <ClipboardList size={14} style={{ color: '#f59e0b' }} />
+                  Historial de errores ({allHistorical.length})
+                </span>
+                {showHistoricalErrors ? <ChevronUp size={16} style={{ color: 'var(--text-muted)' }} /> : <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} />}
+              </div>
+              {showHistoricalErrors && (
+                <div className="px-16" style={{ paddingBottom: 8 }}>
+                  {allHistorical.map((err, i) => (
+                    <div key={`hist-${err.exerciseId}-${err.timestamp}-${i}`}
+                      onClick={() => {
+                        const topic = detail.topics.find(t => t.order === err.topicOrder) || detail.topics.find(t => t.name === err.topicName)
+                        if (topic) openTopic(topic, err.blockId || null)
+                      }}
+                      className="cursor-pointer"
+                      style={{
+                        padding: '8px 12px', marginBottom: 4, borderRadius: 8,
+                        background: 'var(--bg-card)', border: '1px solid var(--border)',
+                      }}>
+                      <div className="flex items-center gap-6" style={{ marginBottom: 3 }}>
+                        <span style={{
+                          fontSize: '0.6rem', fontWeight: 700, textTransform: 'uppercase',
+                          color: err.type === 'manual' ? 'var(--danger)' : '#f59e0b',
+                        }}>
+                          {err.type === 'manual' ? 'Rechazado' : err.type === 'multiple_choice' ? 'Test' : 'Respuesta'}
+                        </span>
+                        <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)' }}>
+                          {err.topicName} &middot; {err.blockTitle}
+                        </span>
+                        <ChevronRight size={12} style={{ marginLeft: 'auto', color: 'var(--text-muted)' }} />
+                      </div>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text)' }}>
+                        <MathText text={err.question} />
+                      </div>
+                      {err.type !== 'manual' && (
+                        <div className="flex gap-8 mt-1" style={{ fontSize: '0.72rem' }}>
+                          <span style={{ color: 'var(--danger)' }}>
+                            Tu: <strong>{typeof err.wrongAnswer === 'number' ? String.fromCharCode(65 + err.wrongAnswer) : String(err.wrongAnswer)}</strong>
+                          </span>
+                          <span style={{ color: 'var(--success)' }}>
+                            Correcta: <strong>{String(err.correctAnswer)}</strong>
+                          </span>
+                        </div>
+                      )}
+                      {err.type === 'manual' && err.feedback && (
+                        <div style={{ fontSize: '0.72rem', padding: '3px 6px', marginTop: 3, borderRadius: 4, background: 'rgba(108,92,231,0.1)', color: 'var(--primary-light)' }}>
+                          <MessageSquare size={9} style={{ display: 'inline', marginRight: 3 }} />
+                          {err.feedback}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )
+        })()}
 
         <div className="section-header">
           <span className="section-title">Planning semanal</span>
