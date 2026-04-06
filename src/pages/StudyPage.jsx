@@ -1,5 +1,4 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import Cropper from 'react-easy-crop'
 import {
   Plus, Check, Trash2, Settings, X, ChevronLeft, ChevronRight,
   Calculator, Leaf, FlaskConical, BookOpen, Globe, Atom,
@@ -66,87 +65,6 @@ const ICON_OPTIONS = [
 const COLOR_OPTIONS = ['#ff6b6b', '#51cf66', '#4f8cff', '#ffd43b', '#cc5de8', '#ff922b', '#20c997', '#748ffc']
 
 const TOPIC_STATES = ['locked', 'available', 'in_progress', 'completed']
-
-// Crop helper: creates a cropped image File from crop area
-async function getCroppedImg(imageSrc, pixelCrop) {
-  const img = new Image()
-  await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = imageSrc })
-  const canvas = document.createElement('canvas')
-  canvas.width = pixelCrop.width
-  canvas.height = pixelCrop.height
-  const ctx = canvas.getContext('2d')
-  ctx.drawImage(img, pixelCrop.x, pixelCrop.y, pixelCrop.width, pixelCrop.height, 0, 0, pixelCrop.width, pixelCrop.height)
-  return new Promise(resolve => {
-    canvas.toBlob(blob => {
-      resolve(new File([blob], 'cropped.jpg', { type: 'image/jpeg' }))
-    }, 'image/jpeg', 0.92)
-  })
-}
-
-function CropModal({ imageSrc, originalFile, onConfirm, onCancel }) {
-  const [crop, setCrop] = useState({ x: 0, y: 0 })
-  const [zoom, setZoom] = useState(1)
-  const [croppedArea, setCroppedArea] = useState(null)
-  const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = '' }
-  }, [])
-
-  const handleCrop = async () => {
-    if (loading) return
-    setLoading(true)
-    try {
-      if (croppedArea && croppedArea.width > 0 && croppedArea.height > 0) {
-        const file = await getCroppedImg(imageSrc, croppedArea)
-        onConfirm(file)
-      } else {
-        onConfirm(originalFile)
-      }
-    } catch {
-      onConfirm(originalFile)
-    }
-  }
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.95)', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ flex: 1, position: 'relative' }}>
-        <Cropper
-          image={imageSrc}
-          crop={crop}
-          zoom={zoom}
-          aspect={undefined}
-          onCropChange={setCrop}
-          onZoomChange={setZoom}
-          onCropComplete={(_, area) => setCroppedArea(area)}
-        />
-      </div>
-      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg)' }}>
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn btn-outline btn-block" onClick={onCancel}>
-            Cancelar
-          </button>
-          <button
-            className="btn btn-block border-none"
-            style={{ background: 'var(--primary)', color: 'white' }}
-            disabled={loading}
-            onClick={handleCrop}
-          >
-            <Check size={16} /> {loading ? 'Procesando...' : 'Recortar'}
-          </button>
-        </div>
-        <button
-          className="btn btn-block border-none"
-          style={{ background: 'var(--bg-card)', color: 'var(--text)', fontSize: '0.8rem' }}
-          onClick={() => onConfirm(originalFile)}
-        >
-          Usar imagen entera
-        </button>
-      </div>
-    </div>
-  )
-}
 
 function PhotoLightbox({ images, startIndex, alt, onClose }) {
   const [idx, setIdx] = useState(startIndex || 0)
@@ -561,12 +479,12 @@ function SubmissionStatusBadge({ exerciseId, submissions = [] }) {
           {sub.feedback && <span className="text-xs text-muted"> - {sub.feedback}</span>}
         </div>
         {sub.correctionUrl && (
-          <div style={{ marginTop: 6 }}>
-            <div className="text-xs text-muted" style={{ fontWeight: 600, marginBottom: 4 }}>Correccion del profesor:</div>
+          <div style={{ marginTop: 6, padding: 6, borderRadius: 8, background: 'rgba(108,92,231,0.08)', border: '1px solid rgba(108,92,231,0.3)' }}>
+            <div className="text-xs" style={{ fontWeight: 700, color: 'var(--primary-light)', marginBottom: 4, fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Imagen del profesor</div>
             <img
               src={sub.correctionUrl}
-              alt="Correccion"
-              style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, border: '1px solid var(--danger)' }}
+              alt="Imagen del profesor"
+              style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 6, border: '2px solid var(--primary-light)' }}
             />
           </div>
         )}
@@ -749,9 +667,6 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
   const [feedback, setFeedback] = useState('')
   const [corrFile, setCorrFile] = useState(null)
   const [corrPreview, setCorrPreview] = useState(null)
-  const [cropSrc, setCropSrc] = useState(null) // image URL to crop
-  const [cropFile, setCropFile] = useState(null) // original file for "use full image"
-  const [cropAction, setCropAction] = useState(null) // 'upload' | 'retry' | 'correction'
   const isDone = exercise.status === 'done' || exercise.status === 'submitted'
   const allSubs = submissions.filter(s => s.exerciseId === exercise.id)
   const latestSub = allSubs.length > 0 ? allSubs[allSubs.length - 1] : null
@@ -762,31 +677,13 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
   const photos = exercise.photoUrls || (exercise.photoUrl ? [exercise.photoUrl] : [])
 
   const handleFileSelected = (file, action) => {
-    const url = URL.createObjectURL(file)
-    setCropSrc(url)
-    setCropFile(file)
-    setCropAction(action)
-  }
-
-  const handleCropConfirm = (file) => {
-    if (cropAction === 'upload') onPhotoUpload(exercise.id, file)
-    else if (cropAction === 'retry') onRetryUpload(exercise.id, file)
-    else if (cropAction === 'correction') { setCorrFile(file); setCorrPreview(URL.createObjectURL(file)) }
-    setCropSrc(null)
-    setCropFile(null)
-    setCropAction(null)
+    if (action === 'upload') onPhotoUpload(exercise.id, file)
+    else if (action === 'retry') onRetryUpload(exercise.id, file)
+    else if (action === 'correction') { setCorrFile(file); setCorrPreview(URL.createObjectURL(file)) }
   }
 
   return (
     <div style={{ padding: '10px 0' }}>
-      {cropSrc && (
-        <CropModal
-          imageSrc={cropSrc}
-          originalFile={cropFile}
-          onConfirm={handleCropConfirm}
-          onCancel={() => { setCropSrc(null); setCropFile(null); setCropAction(null) }}
-        />
-      )}
       <div className="text-0\.85 mb-2"><MathText text={exercise.question} /></div>
       {photos.length > 0 && exercise.status !== 'submitted' && (
         <div style={{ marginBottom: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -965,9 +862,9 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
                     <ClickablePhoto src={sub.photoUrl} alt={`Intento ${i + 1}`} style={{ maxWidth: '100%', maxHeight: isLatest ? 150 : 80, borderRadius: 6, marginTop: 4, opacity: isLatest ? 1 : 0.6 }} />
                   )}
                   {sub.correctionUrl && (
-                    <div style={{ marginTop: 4 }}>
-                      <div className="text-xs" style={{ fontWeight: 600, color: 'var(--primary-light)', marginBottom: 2, fontSize: '0.65rem' }}>Correccion del profesor:</div>
-                      <ClickablePhoto src={sub.correctionUrl} alt="Correccion" style={{ maxWidth: '100%', maxHeight: isLatest ? 120 : 60, borderRadius: 6, border: '1px solid var(--danger)', opacity: isLatest ? 1 : 0.6 }} />
+                    <div style={{ marginTop: 6, padding: 6, borderRadius: 8, background: 'rgba(108,92,231,0.08)', border: '1px solid rgba(108,92,231,0.3)' }}>
+                      <div className="text-xs" style={{ fontWeight: 700, color: 'var(--primary-light)', marginBottom: 3, fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Imagen del profesor</div>
+                      <ClickablePhoto src={sub.correctionUrl} alt="Imagen del profesor" style={{ maxWidth: '100%', maxHeight: isLatest ? 120 : 60, borderRadius: 6, border: '2px solid var(--primary-light)', opacity: isLatest ? 1 : 0.6 }} />
                     </div>
                   )}
                 </div>
@@ -2128,7 +2025,7 @@ function StudyPage() {
   const handleCorrectExercise = async (exerciseId, timestamp, status, feedback, correctionFile) => {
     let correctionUrl = null
     if (correctionFile && isSupabaseConfigured() && supabase) {
-      const ext = correctionFile.name.split('.').pop()
+      const ext = correctionFile.name?.split('.').pop() || 'jpg'
       const path = `corrections/${Date.now()}.${ext}`
       const { error: upErr } = await supabase.storage.from('uploads').upload(path, correctionFile)
       if (!upErr) {
@@ -2136,8 +2033,14 @@ function StudyPage() {
         correctionUrl = data.publicUrl
       }
     }
+    // Fallback: convert to data URL so it persists across sessions
     if (!correctionUrl && correctionFile) {
-      correctionUrl = URL.createObjectURL(correctionFile)
+      correctionUrl = await new Promise(resolve => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = () => resolve(null)
+        reader.readAsDataURL(correctionFile)
+      })
     }
     setSubmissions(prev => {
       const updated = prev.map(s =>
@@ -2879,12 +2782,12 @@ function StudyPage() {
                         </div>
                       )}
                       {sub.correctionUrl && (
-                        <div style={{ marginBottom: 8 }}>
-                          <div className="text-xs text-muted mb-1" style={{ fontWeight: 600 }}>Correccion:</div>
+                        <div style={{ marginBottom: 8, padding: 6, borderRadius: 8, background: 'rgba(108,92,231,0.08)', border: '1px solid rgba(108,92,231,0.3)' }}>
+                          <div className="text-xs mb-1" style={{ fontWeight: 700, color: 'var(--primary-light)', fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Imagen del profesor</div>
                           <ClickablePhoto
                             src={sub.correctionUrl}
-                            alt="Correccion"
-                            style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 8, border: '1px solid var(--danger)' }}
+                            alt="Imagen del profesor"
+                            style={{ maxWidth: '100%', maxHeight: 200, borderRadius: 6, border: '2px solid var(--primary-light)' }}
                           />
                         </div>
                       )}
@@ -3133,7 +3036,10 @@ function StudyPage() {
                       </div>
                     )}
                     {ann.correctionUrl && (
-                      <ClickablePhoto src={ann.correctionUrl} alt="Correccion" style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid var(--primary-light)', marginBottom: 4 }} />
+                      <div style={{ padding: 6, borderRadius: 8, background: 'rgba(108,92,231,0.08)', border: '1px solid rgba(108,92,231,0.3)', marginBottom: 4 }}>
+                        <div className="text-xs" style={{ fontWeight: 700, color: 'var(--primary-light)', marginBottom: 3, fontSize: '0.6rem', textTransform: 'uppercase', letterSpacing: '0.3px' }}>Imagen del profesor</div>
+                        <ClickablePhoto src={ann.correctionUrl} alt="Imagen del profesor" style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 6, border: '2px solid var(--primary-light)' }} />
+                      </div>
                     )}
                     <button
                       className="btn btn-sm w-full"
