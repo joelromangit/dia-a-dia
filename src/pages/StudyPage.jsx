@@ -4,7 +4,8 @@ import {
   Calculator, Leaf, FlaskConical, BookOpen, Globe, Atom,
   Lock, Unlock, CheckCircle, ChevronDown, ChevronUp,
   Camera, Send, ArrowLeft, Image, Upload, Zap,
-  Clock, MessageSquare, ThumbsUp, ThumbsDown, ClipboardList, RefreshCw
+  Clock, MessageSquare, ThumbsUp, ThumbsDown, ClipboardList, RefreshCw,
+  ArrowUp
 } from 'lucide-react'
 import katex from 'katex'
 import { mockStudy } from '../data/mockData'
@@ -1149,6 +1150,16 @@ function StudyPage() {
   const [feedbackText, setFeedbackText] = useState('')
   const [correctionFile, setCorrectionFile] = useState(null)
   const [correctionPreview, setCorrectionPreview] = useState(null)
+  const topicTopRef = useRef(null)
+  const [showScrollTop, setShowScrollTop] = useState(false)
+
+  // Show scroll-to-top button when user scrolls down in topic view
+  useEffect(() => {
+    if (!activeTopic) { setShowScrollTop(false); return }
+    const onScroll = () => setShowScrollTop(window.scrollY > 300)
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [activeTopic])
   const correctionFileRef = useRef(null)
   const [errors, setErrors] = useState({})
   const [unlockPrompt, setUnlockPrompt] = useState(null) // { type, subjectId, topicIndex?, blockId? }
@@ -1968,6 +1979,7 @@ function StudyPage() {
           </div>
         )}
 
+        <div ref={topicTopRef} />
         <div className="p-16 sticky-top" style={{
           background: `linear-gradient(135deg, ${detail.color}18 0%, var(--bg) 100%)`,
           backdropFilter: 'blur(10px)'
@@ -2208,6 +2220,21 @@ function StudyPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {showScrollTop && (
+          <button
+            onClick={() => topicTopRef.current?.scrollIntoView({ behavior: 'smooth' })}
+            style={{
+              position: 'fixed', bottom: 80, right: 16, zIndex: 50,
+              width: 44, height: 44, borderRadius: '50%',
+              background: detail.color, color: 'white', border: 'none',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 4px 12px rgba(0,0,0,0.3)', cursor: 'pointer',
+            }}
+          >
+            <ArrowUp size={20} />
+          </button>
         )}
       </div>
     )
