@@ -68,50 +68,72 @@ const TOPIC_STATES = ['locked', 'available', 'in_progress', 'completed']
 function PhotoLightbox({ src, alt, onClose }) {
   const [scale, setScale] = useState(1)
   const [translate, setTranslate] = useState({ x: 0, y: 0 })
+  const overlayRef = useRef(null)
   const lastDist = useRef(null)
   const lastCenter = useRef(null)
-  const imgRef = useRef(null)
-  const initialDist = useRef(null)
+  const scaleRef = useRef(1)
+  const translateRef = useRef({ x: 0, y: 0 })
 
-  const getDistance = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
-  const getCenter = (t1, t2) => ({ x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 })
+  // Keep refs in sync with state
+  useEffect(() => { scaleRef.current = scale }, [scale])
+  useEffect(() => { translateRef.current = translate }, [translate])
 
-  const handleTouchStart = (e) => {
-    if (e.touches.length === 2) {
-      const dist = getDistance(e.touches[0], e.touches[1])
-      lastDist.current = dist
-      lastCenter.current = getCenter(e.touches[0], e.touches[1])
-      if (initialDist.current === null) initialDist.current = dist
-    }
-  }
+  // Native non-passive touch listeners to block iOS Safari zoom
+  useEffect(() => {
+    const el = overlayRef.current
+    if (!el) return
 
-  const handleTouchMove = (e) => {
-    if (e.touches.length === 2) {
+    const getDistance = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
+    const getCenter = (t1, t2) => ({ x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 })
+
+    const onTouchStart = (e) => {
       e.preventDefault()
-      const dist = getDistance(e.touches[0], e.touches[1])
-      const center = getCenter(e.touches[0], e.touches[1])
-      if (lastDist.current !== null) {
-        const ratio = dist / lastDist.current
-        const newScale = Math.min(Math.max(scale * ratio, 1), 5)
-        setScale(newScale)
-        if (lastCenter.current && newScale > 1) {
-          setTranslate(prev => ({
-            x: prev.x + (center.x - lastCenter.current.x),
-            y: prev.y + (center.y - lastCenter.current.y),
-          }))
-        }
+      if (e.touches.length === 2) {
+        lastDist.current = getDistance(e.touches[0], e.touches[1])
+        lastCenter.current = getCenter(e.touches[0], e.touches[1])
       }
-      lastDist.current = dist
-      lastCenter.current = center
     }
-  }
 
-  const handleTouchEnd = () => {
-    lastDist.current = null
-    lastCenter.current = null
-    initialDist.current = null
-    if (scale <= 1.05) { setScale(1); setTranslate({ x: 0, y: 0 }) }
-  }
+    const onTouchMove = (e) => {
+      e.preventDefault()
+      if (e.touches.length === 2) {
+        const dist = getDistance(e.touches[0], e.touches[1])
+        const center = getCenter(e.touches[0], e.touches[1])
+        if (lastDist.current !== null) {
+          const ratio = dist / lastDist.current
+          const newScale = Math.min(Math.max(scaleRef.current * ratio, 1), 5)
+          setScale(newScale)
+          if (lastCenter.current && newScale > 1) {
+            setTranslate(prev => ({
+              x: prev.x + (center.x - lastCenter.current.x),
+              y: prev.y + (center.y - lastCenter.current.y),
+            }))
+          }
+        }
+        lastDist.current = dist
+        lastCenter.current = center
+      }
+    }
+
+    const onTouchEnd = (e) => {
+      e.preventDefault()
+      lastDist.current = null
+      lastCenter.current = null
+      if (scaleRef.current <= 1.05) {
+        setScale(1)
+        setTranslate({ x: 0, y: 0 })
+      }
+    }
+
+    el.addEventListener('touchstart', onTouchStart, { passive: false })
+    el.addEventListener('touchmove', onTouchMove, { passive: false })
+    el.addEventListener('touchend', onTouchEnd, { passive: false })
+    return () => {
+      el.removeEventListener('touchstart', onTouchStart)
+      el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('touchend', onTouchEnd)
+    }
+  }, [])
 
   const handleDoubleClick = (e) => {
     e.stopPropagation()
@@ -121,10 +143,8 @@ function PhotoLightbox({ src, alt, onClose }) {
 
   return (
     <div
+      ref={overlayRef}
       onClick={() => onClose()}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
       style={{
         position: 'fixed', inset: 0, zIndex: 9999,
         background: 'rgba(0,0,0,0.92)',
@@ -140,7 +160,6 @@ function PhotoLightbox({ src, alt, onClose }) {
         <X size={20} color="white" />
       </button>
       <img
-        ref={imgRef}
         src={src}
         alt={alt || 'Foto'}
         onClick={e => e.stopPropagation()}
@@ -150,6 +169,7 @@ function PhotoLightbox({ src, alt, onClose }) {
           cursor: scale > 1 ? 'grab' : 'default',
           transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
           transition: lastDist.current !== null ? 'none' : 'transform 0.2s ease',
+          pointerEvents: 'none',
         }}
       />
     </div>
