@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import Cropper from 'react-easy-crop'
 import {
   Plus, Check, Trash2, Settings, X, ChevronLeft, ChevronRight,
   Calculator, Leaf, FlaskConical, BookOpen, Globe, Atom,
@@ -65,6 +66,70 @@ const ICON_OPTIONS = [
 const COLOR_OPTIONS = ['#ff6b6b', '#51cf66', '#4f8cff', '#ffd43b', '#cc5de8', '#ff922b', '#20c997', '#748ffc']
 
 const TOPIC_STATES = ['locked', 'available', 'in_progress', 'completed']
+
+// Crop helper: creates a cropped image File from crop area
+async function getCroppedImg(imageSrc, pixelCrop) {
+  const img = new Image()
+  img.crossOrigin = 'anonymous'
+  await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = imageSrc })
+  const canvas = document.createElement('canvas')
+  canvas.width = pixelCrop.width
+  canvas.height = pixelCrop.height
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(img, pixelCrop.x, pixelCrop.y, pixelCrop.width, pixelCrop.height, 0, 0, pixelCrop.width, pixelCrop.height)
+  return new Promise(resolve => {
+    canvas.toBlob(blob => {
+      resolve(new File([blob], 'cropped.jpg', { type: 'image/jpeg' }))
+    }, 'image/jpeg', 0.92)
+  })
+}
+
+function CropModal({ imageSrc, onConfirm, onCancel }) {
+  const [crop, setCrop] = useState({ x: 0, y: 0 })
+  const [zoom, setZoom] = useState(1)
+  const [croppedArea, setCroppedArea] = useState(null)
+
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [])
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.95)', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ flex: 1, position: 'relative' }}>
+        <Cropper
+          image={imageSrc}
+          crop={crop}
+          zoom={zoom}
+          aspect={undefined}
+          onCropChange={setCrop}
+          onZoomChange={setZoom}
+          onCropComplete={(_, area) => setCroppedArea(area)}
+        />
+      </div>
+      <div style={{ padding: '12px 16px', display: 'flex', gap: 12, background: 'var(--bg)' }}>
+        <button
+          className="btn btn-outline btn-block"
+          onClick={onCancel}
+        >
+          Cancelar
+        </button>
+        <button
+          className="btn btn-block border-none"
+          style={{ background: 'var(--primary)', color: 'white' }}
+          onClick={async () => {
+            if (croppedArea) {
+              const file = await getCroppedImg(imageSrc, croppedArea)
+              onConfirm(file)
+            }
+          }}
+        >
+          <Check size={16} /> Recortar
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function PhotoLightbox({ src, alt, onClose }) {
   useEffect(() => {
@@ -608,6 +673,8 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
   const [feedback, setFeedback] = useState('')
   const [corrFile, setCorrFile] = useState(null)
   const [corrPreview, setCorrPreview] = useState(null)
+  const [cropSrc, setCropSrc] = useState(null) // image to crop
+  const [cropAction, setCropAction] = useState(null) // 'upload' | 'retry' | 'correction'
   const isDone = exercise.status === 'done' || exercise.status === 'submitted'
   const allSubs = submissions.filter(s => s.exerciseId === exercise.id)
   const latestSub = allSubs.length > 0 ? allSubs[allSubs.length - 1] : null
@@ -615,8 +682,29 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
   const isPendingReview = latestSub?.status === 'pending'
   const isApproved = latestSub?.status === 'approved'
 
+  const handleFileSelected = (file, action) => {
+    const url = URL.createObjectURL(file)
+    setCropSrc(url)
+    setCropAction(action)
+  }
+
+  const handleCropConfirm = (croppedFile) => {
+    if (cropAction === 'upload') onPhotoUpload(exercise.id, croppedFile)
+    else if (cropAction === 'retry') onRetryUpload(exercise.id, croppedFile)
+    else if (cropAction === 'correction') { setCorrFile(croppedFile); setCorrPreview(URL.createObjectURL(croppedFile)) }
+    setCropSrc(null)
+    setCropAction(null)
+  }
+
   return (
     <div style={{ padding: '10px 0' }}>
+      {cropSrc && (
+        <CropModal
+          imageSrc={cropSrc}
+          onConfirm={handleCropConfirm}
+          onCancel={() => { setCropSrc(null); setCropAction(null) }}
+        />
+      )}
       <div className="text-0\.85 mb-2"><MathText text={exercise.question} /></div>
       {exercise.photoUrl && (
         <div style={{ marginBottom: 8 }}>
@@ -664,7 +752,8 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
                 style={{ display: 'none' }}
                 onChange={e => {
                   const file = e.target.files?.[0]
-                  if (file) onRetryUpload(exercise.id, file)
+                  if (file) handleFileSelected(file, 'retry')
+                  e.target.value = ''
                 }}
               />
               <button
@@ -701,10 +790,8 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
                   style={{ display: 'none' }}
                   onChange={e => {
                     const file = e.target.files?.[0]
-                    if (file) {
-                      setCorrFile(file)
-                      setCorrPreview(URL.createObjectURL(file))
-                    }
+                    if (file) handleFileSelected(file, 'correction')
+                    e.target.value = ''
                   }}
                 />
                 <button
@@ -717,7 +804,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
               </div>
               {corrPreview && (
                 <div style={{ marginBottom: 8 }}>
-                  <img src={corrPreview} alt="Preview" style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid var(--border)' }} />
+                  <ClickablePhoto src={corrPreview} alt="Preview" style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid var(--border)' }} />
                 </div>
               )}
               <div className="flex gap-6">
@@ -784,7 +871,8 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
             style={{ display: 'none' }}
             onChange={e => {
               const file = e.target.files?.[0]
-              if (file) onPhotoUpload(exercise.id, file)
+              if (file) handleFileSelected(file, 'upload')
+              e.target.value = ''
             }}
           />
           <button className="btn btn-outline btn-sm" onClick={() => fileRef.current?.click()}>
