@@ -1137,7 +1137,10 @@ function TheoryBlockCard({ block, subjectColor, isAdmin, onExerciseAnswer, onPho
                   <div className="flex items-center gap-2" style={{ paddingTop: i > 0 ? 8 : 0 }}>
                     <span className="text-xs text-muted font-600">{i + 1}.</span>
                     {ex.status === 'submitted' && ex.type === 'auto' && <span className="badge badge-success" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Hecho</span>}
-                    {ex.status === 'submitted' && ex.type === 'manual' && latestSub?.status === 'approved' && <span className="badge badge-success" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Corregido</span>}
+                    {ex.status === 'submitted' && ex.type === 'manual' && latestSub?.status === 'approved' && (latestSub.feedback || latestSub.correctionUrl)
+                      ? <span className="badge" style={{ fontSize: '0.6rem', padding: '1px 6px', background: 'rgba(0,206,201,0.12)', color: 'var(--success)' }}>Corregido con anotacion</span>
+                      : ex.status === 'submitted' && ex.type === 'manual' && latestSub?.status === 'approved' && <span className="badge badge-success" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Corregido</span>
+                    }
                     {ex.status === 'submitted' && ex.type === 'manual' && latestSub?.status === 'rejected' && <span className="badge" style={{ fontSize: '0.6rem', padding: '1px 6px', background: 'rgba(255,118,117,0.15)', color: 'var(--danger)' }}>Rechazado</span>}
                     {ex.status === 'submitted' && ex.type === 'manual' && (!latestSub || latestSub.status === 'pending') && <span className="badge" style={{ fontSize: '0.6rem', padding: '1px 6px', background: 'rgba(108,92,231,0.12)', color: 'var(--primary-light)' }}>Por corregir</span>}
                     {ex.status === 'done' && <span className="badge badge-success" style={{ fontSize: '0.6rem', padding: '1px 6px' }}>Hecho</span>}
@@ -1348,6 +1351,7 @@ function StudyPage() {
   const [showHistoricalAnnotations, setShowHistoricalAnnotations] = useState(false)
   const [showTeacherReview, setShowTeacherReview] = useState(false)
   const [scrollToExerciseId, setScrollToExerciseId] = useState(null)
+  const [scrollHighlightType, setScrollHighlightType] = useState('error') // 'error' | 'annotation'
 
   // Show scroll-to-top button when user scrolls down in topic view
   useEffect(() => {
@@ -1357,9 +1361,9 @@ function StudyPage() {
     return () => window.removeEventListener('scroll', onScroll)
   }, [activeTopic])
 
-  const highlightExercise = useCallback((el) => {
+  const highlightExercise = useCallback((el, color = 'var(--danger)', glow = 'rgba(255,118,117,0.3)') => {
     if (!el) return
-    el.style.boxShadow = 'inset 0 0 0 2px var(--danger), 0 0 12px rgba(255,118,117,0.3)'
+    el.style.boxShadow = `inset 0 0 0 2px ${color}, 0 0 12px ${glow}`
     el.style.borderRadius = '10px'
     el.style.padding = '8px'
     el.style.margin = '-8px'
@@ -1379,9 +1383,14 @@ function StudyPage() {
       const el = document.getElementById(`exercise-${scrollToExerciseId}`)
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        highlightExercise(el)
+        if (scrollHighlightType === 'annotation') {
+          highlightExercise(el, 'var(--success)', 'rgba(0,206,201,0.3)')
+        } else {
+          highlightExercise(el)
+        }
       }
       setScrollToExerciseId(null)
+      setScrollHighlightType('error')
     }, 400)
     return () => clearTimeout(timer)
   }, [scrollToExerciseId, activeTopic, highlightExercise])
@@ -1922,7 +1931,7 @@ function StudyPage() {
     }
   }
 
-  const openTopic = (topic, blockId = null, exerciseId = null) => {
+  const openTopic = (topic, blockId = null, exerciseId = null, highlightType = 'error') => {
     const state = getTopicStateFromLegacy(topic.status)
     if (!isAdmin && state === 'locked') return
     if (state === 'available') {
@@ -1941,7 +1950,10 @@ function StudyPage() {
     }
     setExpandedBlockId(blockId)
     setFilterErrors(false)
-    if (exerciseId) setScrollToExerciseId(exerciseId)
+    if (exerciseId) {
+      setScrollToExerciseId(exerciseId)
+      setScrollHighlightType(highlightType)
+    }
     setActiveTopic(topic)
   }
 
@@ -2102,6 +2114,9 @@ function StudyPage() {
         const { data } = supabase.storage.from('uploads').getPublicUrl(path)
         correctionUrl = data.publicUrl
       }
+    }
+    if (!correctionUrl && correctionFile) {
+      correctionUrl = URL.createObjectURL(correctionFile)
     }
     setSubmissions(prev => {
       const updated = prev.map(s =>
@@ -3085,7 +3100,7 @@ function StudyPage() {
                     <div style={{ fontSize: '0.82rem', color: 'var(--text)', marginBottom: 4, cursor: 'pointer' }}
                       onClick={() => {
                         const topic = detail.topics.find(t => t.order === ann.topicOrder)
-                        if (topic) openTopic(topic, ann.blockId, ann.exerciseId)
+                        if (topic) openTopic(topic, ann.blockId, ann.exerciseId, 'annotation')
                       }}>
                       <MathText text={ann.question} />
                       <ChevronRight size={12} style={{ display: 'inline', marginLeft: 4, color: 'var(--text-muted)' }} />
@@ -3398,7 +3413,7 @@ function StudyPage() {
                     <div key={`ann-${ann.exerciseId}-${ann.timestamp}-${i}`}
                       onClick={() => {
                         const topic = detail.topics.find(t => t.order === ann.topicOrder)
-                        if (topic) openTopic(topic, ann.blockId, ann.exerciseId)
+                        if (topic) openTopic(topic, ann.blockId, ann.exerciseId, 'annotation')
                       }}
                       className="cursor-pointer"
                       style={{
@@ -3487,7 +3502,7 @@ function StudyPage() {
                     <div key={`rev-a-${c.exerciseId}-${c.timestamp}-${i}`}
                       onClick={() => {
                         const topic = detail.topics.find(t => t.order === c.topicOrder)
-                        if (topic) openTopic(topic, c.blockId, c.exerciseId)
+                        if (topic) openTopic(topic, c.blockId, c.exerciseId, 'annotation')
                       }}
                       className="cursor-pointer"
                       style={{ padding: '6px 10px', marginBottom: 3, borderRadius: 6, background: 'rgba(0,206,201,0.06)', border: '1px solid rgba(0,206,201,0.15)' }}>
