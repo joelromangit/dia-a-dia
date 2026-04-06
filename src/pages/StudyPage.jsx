@@ -797,14 +797,13 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
               <ClickablePhoto src={latestSub.correctionUrl} alt="Correccion" style={{ maxWidth: '100%', maxHeight: 150, borderRadius: 8, border: '1px solid var(--danger)' }} />
             </div>
           )}
-          {/* Student actions: change/delete photo when pending or rejected */}
-          {!isAdmin && (isRejected || isPendingReview) && (
+          {/* Student actions: change/delete photo */}
+          {!isAdmin && (
             <div style={{ marginTop: 8 }} className="flex gap-6">
               <input
                 ref={retryFileRef}
                 type="file"
                 accept="image/*"
-                capture="environment"
                 style={{ display: 'none' }}
                 onChange={e => {
                   const file = e.target.files?.[0]
@@ -829,7 +828,7 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
             </div>
           )}
           {/* Admin correction UI */}
-          {isAdmin && isPendingReview && (
+          {isAdmin && (
             <div style={{ marginTop: 10, padding: 10, borderRadius: 8, border: '1px solid var(--primary-light)', background: 'rgba(108,92,231,0.05)' }}>
               <div className="text-xs font-700 mb-2" style={{ color: 'var(--primary-light)' }}>Corregir ejercicio</div>
               <input
@@ -863,32 +862,41 @@ function ManualExercise({ exercise, onPhotoUpload, onRetryUpload, onDeletePhoto,
                   <ClickablePhoto src={corrPreview} alt="Preview" style={{ maxWidth: '100%', maxHeight: 120, borderRadius: 8, border: '1px solid var(--border)' }} />
                 </div>
               )}
-              <div className="flex gap-6">
-                <button
-                  className="btn btn-sm flex-1"
-                  style={{ background: 'rgba(0,206,201,0.15)', color: 'var(--success)', border: 'none', justifyContent: 'center' }}
-                  onClick={() => {
-                    onCorrect(exercise.id, latestSub.timestamp, 'approved', feedback, null)
-                    setFeedback('')
-                    setCorrFile(null)
-                    setCorrPreview(null)
-                  }}
-                >
-                  <ThumbsUp size={12} /> Aprobar
-                </button>
-                <button
-                  className="btn btn-sm flex-1"
-                  style={{ background: 'rgba(255,118,117,0.15)', color: 'var(--danger)', border: 'none', justifyContent: 'center' }}
-                  onClick={() => {
-                    onCorrect(exercise.id, latestSub.timestamp, 'rejected', feedback, corrFile)
-                    setFeedback('')
-                    setCorrFile(null)
-                    setCorrPreview(null)
-                  }}
-                >
-                  <ThumbsDown size={12} /> Rechazar
-                </button>
-              </div>
+              {latestSub && (
+                <div className="flex gap-6">
+                  <button
+                    className="btn btn-sm flex-1"
+                    style={{ background: 'rgba(0,206,201,0.15)', color: 'var(--success)', border: 'none', justifyContent: 'center' }}
+                    onClick={() => {
+                      onCorrect(exercise.id, latestSub.timestamp, 'approved', feedback, null)
+                      setFeedback('')
+                      setCorrFile(null)
+                      setCorrPreview(null)
+                    }}
+                  >
+                    <ThumbsUp size={12} /> Aprobar
+                  </button>
+                  <button
+                    className="btn btn-sm flex-1"
+                    style={{ background: 'rgba(255,118,117,0.15)', color: 'var(--danger)', border: 'none', justifyContent: 'center' }}
+                    onClick={() => {
+                      onCorrect(exercise.id, latestSub.timestamp, 'rejected', feedback, corrFile)
+                      setFeedback('')
+                      setCorrFile(null)
+                      setCorrPreview(null)
+                    }}
+                  >
+                    <ThumbsDown size={12} /> Rechazar
+                  </button>
+                </div>
+              )}
+              <button
+                className="btn btn-sm w-full mt-2"
+                style={{ background: 'rgba(255,118,117,0.1)', color: 'var(--danger)', border: 'none', justifyContent: 'center', fontSize: '0.7rem' }}
+                onClick={() => onDeletePhoto(exercise.id)}
+              >
+                <Trash2 size={12} /> Borrar fotos y reiniciar ejercicio
+              </button>
             </div>
           )}
         </div>
