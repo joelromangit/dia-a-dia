@@ -66,6 +66,10 @@ const COLOR_OPTIONS = ['#ff6b6b', '#51cf66', '#4f8cff', '#ffd43b', '#cc5de8', '#
 const TOPIC_STATES = ['locked', 'available', 'in_progress', 'completed']
 
 function PhotoLightbox({ src, alt, onClose }) {
+  useEffect(() => {
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [])
   return (
     <div
       onClick={onClose}
@@ -73,7 +77,7 @@ function PhotoLightbox({ src, alt, onClose }) {
         position: 'fixed', inset: 0, zIndex: 9999,
         background: 'rgba(0,0,0,0.92)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16,
+        padding: 16, overscrollBehavior: 'contain',
       }}
     >
       <button onClick={(e) => { e.stopPropagation(); onClose() }} style={{
