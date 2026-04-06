@@ -72,36 +72,45 @@ function PhotoLightbox({ src, alt, onClose }) {
   const lastDist = useRef(null)
   const lastCenter = useRef(null)
   const scaleRef = useRef(1)
-  const translateRef = useRef({ x: 0, y: 0 })
 
-  // Keep refs in sync with state
   useEffect(() => { scaleRef.current = scale }, [scale])
-  useEffect(() => { translateRef.current = translate }, [translate])
 
-  // Native non-passive touch listeners to block iOS Safari zoom
+  // Block ALL zoom gestures at document level while lightbox is open
+  useEffect(() => {
+    const prevent = (e) => e.preventDefault()
+    // Safari-specific gesture events (the real cause of native zoom)
+    document.addEventListener('gesturestart', prevent, { passive: false })
+    document.addEventListener('gesturechange', prevent, { passive: false })
+    document.addEventListener('gestureend', prevent, { passive: false })
+    return () => {
+      document.removeEventListener('gesturestart', prevent)
+      document.removeEventListener('gesturechange', prevent)
+      document.removeEventListener('gestureend', prevent)
+    }
+  }, [])
+
+  // Touch handlers for pinch-to-zoom (only zoom in, never below 1x)
   useEffect(() => {
     const el = overlayRef.current
     if (!el) return
 
-    const getDistance = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
-    const getCenter = (t1, t2) => ({ x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 })
+    const getDist = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
+    const getMid = (t1, t2) => ({ x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 })
 
     const onTouchStart = (e) => {
-      e.preventDefault()
-      if (e.touches.length === 2) {
-        lastDist.current = getDistance(e.touches[0], e.touches[1])
-        lastCenter.current = getCenter(e.touches[0], e.touches[1])
+      if (e.touches.length >= 2) {
+        e.preventDefault()
+        lastDist.current = getDist(e.touches[0], e.touches[1])
+        lastCenter.current = getMid(e.touches[0], e.touches[1])
       }
     }
-
     const onTouchMove = (e) => {
-      e.preventDefault()
-      if (e.touches.length === 2) {
-        const dist = getDistance(e.touches[0], e.touches[1])
-        const center = getCenter(e.touches[0], e.touches[1])
+      if (e.touches.length >= 2) {
+        e.preventDefault()
+        const dist = getDist(e.touches[0], e.touches[1])
+        const center = getMid(e.touches[0], e.touches[1])
         if (lastDist.current !== null) {
-          const ratio = dist / lastDist.current
-          const newScale = Math.min(Math.max(scaleRef.current * ratio, 1), 5)
+          const newScale = Math.min(Math.max(scaleRef.current * (dist / lastDist.current), 1), 5)
           setScale(newScale)
           if (lastCenter.current && newScale > 1) {
             setTranslate(prev => ({
@@ -114,32 +123,21 @@ function PhotoLightbox({ src, alt, onClose }) {
         lastCenter.current = center
       }
     }
-
-    const onTouchEnd = (e) => {
-      e.preventDefault()
+    const onTouchEnd = () => {
       lastDist.current = null
       lastCenter.current = null
-      if (scaleRef.current <= 1.05) {
-        setScale(1)
-        setTranslate({ x: 0, y: 0 })
-      }
+      if (scaleRef.current <= 1.05) { setScale(1); setTranslate({ x: 0, y: 0 }) }
     }
 
     el.addEventListener('touchstart', onTouchStart, { passive: false })
     el.addEventListener('touchmove', onTouchMove, { passive: false })
-    el.addEventListener('touchend', onTouchEnd, { passive: false })
+    el.addEventListener('touchend', onTouchEnd)
     return () => {
       el.removeEventListener('touchstart', onTouchStart)
       el.removeEventListener('touchmove', onTouchMove)
       el.removeEventListener('touchend', onTouchEnd)
     }
   }, [])
-
-  const handleDoubleClick = (e) => {
-    e.stopPropagation()
-    if (scale > 1) { setScale(1); setTranslate({ x: 0, y: 0 }) }
-    else { setScale(2.5) }
-  }
 
   return (
     <div
@@ -149,7 +147,7 @@ function PhotoLightbox({ src, alt, onClose }) {
         position: 'fixed', inset: 0, zIndex: 9999,
         background: 'rgba(0,0,0,0.92)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 16, cursor: 'zoom-out', touchAction: 'none', overflow: 'hidden',
+        padding: 16, touchAction: 'none', overflow: 'hidden',
       }}
     >
       <button onClick={(e) => { e.stopPropagation(); onClose() }} style={{
@@ -162,11 +160,8 @@ function PhotoLightbox({ src, alt, onClose }) {
       <img
         src={src}
         alt={alt || 'Foto'}
-        onClick={e => e.stopPropagation()}
-        onDoubleClick={handleDoubleClick}
         style={{
           maxWidth: '100%', maxHeight: '90vh', borderRadius: 8, objectFit: 'contain',
-          cursor: scale > 1 ? 'grab' : 'default',
           transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
           transition: lastDist.current !== null ? 'none' : 'transform 0.2s ease',
           pointerEvents: 'none',
