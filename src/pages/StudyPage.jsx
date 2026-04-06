@@ -1357,6 +1357,21 @@ function StudyPage() {
     return () => window.removeEventListener('scroll', onScroll)
   }, [activeTopic])
 
+  const highlightExercise = useCallback((el) => {
+    if (!el) return
+    el.style.boxShadow = 'inset 0 0 0 2px var(--danger), 0 0 12px rgba(255,118,117,0.3)'
+    el.style.borderRadius = '10px'
+    el.style.padding = '8px'
+    el.style.margin = '-8px'
+    el.style.transition = 'box-shadow 0.3s, padding 0.3s, margin 0.3s'
+    setTimeout(() => {
+      el.style.boxShadow = ''
+      el.style.borderRadius = ''
+      el.style.padding = ''
+      el.style.margin = ''
+    }, 3000)
+  }, [])
+
   // Scroll to specific exercise after topic opens
   useEffect(() => {
     if (!scrollToExerciseId || !activeTopic) return
@@ -1364,15 +1379,12 @@ function StudyPage() {
       const el = document.getElementById(`exercise-${scrollToExerciseId}`)
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        el.style.outline = '2px solid var(--danger)'
-        el.style.outlineOffset = '4px'
-        el.style.borderRadius = '8px'
-        setTimeout(() => { el.style.outline = ''; el.style.outlineOffset = '' }, 3000)
+        highlightExercise(el)
       }
       setScrollToExerciseId(null)
     }, 400)
     return () => clearTimeout(timer)
-  }, [scrollToExerciseId, activeTopic])
+  }, [scrollToExerciseId, activeTopic, highlightExercise])
 
   const correctionFileRef = useRef(null)
   const [errors, setErrors] = useState({})
@@ -2572,25 +2584,25 @@ function StudyPage() {
           if (errorExIds.length === 0) return null
           return (
             <button
+              title="Ir al siguiente ejercicio con error"
               onClick={() => {
-                const scrollY = window.scrollY
+                // Find the first error element whose top is below the viewport center
+                const viewMid = window.innerHeight / 2
                 let nextEl = null
                 for (const id of errorExIds) {
                   const el = document.getElementById(`exercise-${id}`)
-                  if (el && el.getBoundingClientRect().top > 100) {
+                  if (el && el.getBoundingClientRect().top > viewMid + 10) {
                     nextEl = el
                     break
                   }
                 }
-                if (!nextEl && errorExIds.length > 0) {
+                // If none found below, wrap around to the first one
+                if (!nextEl) {
                   nextEl = document.getElementById(`exercise-${errorExIds[0]}`)
                 }
                 if (nextEl) {
                   nextEl.scrollIntoView({ behavior: 'smooth', block: 'center' })
-                  nextEl.style.outline = '2px solid var(--danger)'
-                  nextEl.style.outlineOffset = '4px'
-                  nextEl.style.borderRadius = '8px'
-                  setTimeout(() => { nextEl.style.outline = ''; nextEl.style.outlineOffset = '' }, 2000)
+                  highlightExercise(nextEl)
                 }
               }}
               style={{
@@ -2608,6 +2620,7 @@ function StudyPage() {
 
         {showScrollTop && (
           <button
+            title="Volver al inicio del tema"
             onClick={() => topicTopRef.current?.scrollIntoView({ behavior: 'smooth' })}
             style={{
               position: 'fixed', bottom: 126, right: 16, zIndex: 50,
