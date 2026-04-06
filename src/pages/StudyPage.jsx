@@ -71,17 +71,19 @@ function PhotoLightbox({ src, alt, onClose }) {
   const lastDist = useRef(null)
   const lastCenter = useRef(null)
   const imgRef = useRef(null)
-
-  // Enable zoom on viewport when lightbox opens
-  useEffect(() => {
-    const meta = document.querySelector('meta[name="viewport"]')
-    const original = meta?.getAttribute('content')
-    if (meta) meta.setAttribute('content', 'width=device-width, initial-scale=1.0')
-    return () => { if (meta && original) meta.setAttribute('content', original) }
-  }, [])
+  const initialDist = useRef(null)
 
   const getDistance = (t1, t2) => Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY)
   const getCenter = (t1, t2) => ({ x: (t1.clientX + t2.clientX) / 2, y: (t1.clientY + t2.clientY) / 2 })
+
+  const handleTouchStart = (e) => {
+    if (e.touches.length === 2) {
+      const dist = getDistance(e.touches[0], e.touches[1])
+      lastDist.current = dist
+      lastCenter.current = getCenter(e.touches[0], e.touches[1])
+      if (initialDist.current === null) initialDist.current = dist
+    }
+  }
 
   const handleTouchMove = (e) => {
     if (e.touches.length === 2) {
@@ -89,9 +91,10 @@ function PhotoLightbox({ src, alt, onClose }) {
       const dist = getDistance(e.touches[0], e.touches[1])
       const center = getCenter(e.touches[0], e.touches[1])
       if (lastDist.current !== null) {
-        const newScale = Math.min(Math.max(scale * (dist / lastDist.current), 1), 5)
+        const ratio = dist / lastDist.current
+        const newScale = Math.min(Math.max(scale * ratio, 1), 5)
         setScale(newScale)
-        if (lastCenter.current) {
+        if (lastCenter.current && newScale > 1) {
           setTranslate(prev => ({
             x: prev.x + (center.x - lastCenter.current.x),
             y: prev.y + (center.y - lastCenter.current.y),
@@ -106,6 +109,7 @@ function PhotoLightbox({ src, alt, onClose }) {
   const handleTouchEnd = () => {
     lastDist.current = null
     lastCenter.current = null
+    initialDist.current = null
     if (scale <= 1.05) { setScale(1); setTranslate({ x: 0, y: 0 }) }
   }
 
@@ -117,7 +121,8 @@ function PhotoLightbox({ src, alt, onClose }) {
 
   return (
     <div
-      onClick={() => { if (scale <= 1.05) onClose() }}
+      onClick={() => onClose()}
+      onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
       style={{
