@@ -1325,6 +1325,7 @@ function StudyPage() {
   const [unlockPassword, setUnlockPassword] = useState('')
   const [unlockError, setUnlockError] = useState(false)
   const [confirmAction, setConfirmAction] = useState(null) // { message, onConfirm }
+  const [pdfViewer, setPdfViewer] = useState(null)
   const [selectedPlanDate, setSelectedPlanDate] = useState(null)
 
   // Load data from Supabase on mount
@@ -2441,16 +2442,25 @@ function StudyPage() {
                 {(currentTopicData.extraMaterials || []).map(mat => (
                   <div key={mat.id} className="flex items-center gap-8" style={{
                     padding: '8px', marginBottom: 4, borderRadius: 8,
-                    background: 'var(--bg-card)', border: '1px solid var(--border)',
+                    background: 'var(--bg-card)', border: '1px solid var(--border)', cursor: 'pointer',
+                  }} onClick={() => {
+                    const isPdf = mat.type === 'application/pdf' || mat.name?.endsWith('.pdf')
+                    if (isPdf) {
+                      setPdfViewer({ url: mat.url, name: mat.name })
+                    } else if (mat.type?.startsWith('image/')) {
+                      setLightbox({ images: [mat.url], startIndex: 0, alt: mat.name })
+                    } else {
+                      window.open(mat.url, '_blank')
+                    }
                   }}>
                     {mat.type?.startsWith('image/') ? (
                       <Image size={14} style={{ color: detail.color, flexShrink: 0 }} />
                     ) : (
                       <Upload size={14} style={{ color: detail.color, flexShrink: 0 }} />
                     )}
-                    <a href={mat.url} target="_blank" rel="noopener noreferrer" className="flex-1 text-xs" style={{ color: detail.color }}>
+                    <span className="flex-1 text-xs" style={{ color: detail.color }}>
                       {mat.name || 'Material'}
-                    </a>
+                    </span>
                     <span className="text-xs text-muted">
                       {new Date(mat.uploadDate).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}
                     </span>
@@ -2479,6 +2489,31 @@ function StudyPage() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {pdfViewer && (
+          <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'var(--bg)', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 10, background: 'var(--bg-card)', borderBottom: '1px solid var(--border)' }}>
+              <button
+                className="btn btn-sm btn-outline"
+                style={{ padding: '6px 10px' }}
+                onClick={() => setPdfViewer(null)}
+              >
+                <ArrowLeft size={16} /> Volver
+              </button>
+              <span className="text-xs font-600 flex-1" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {pdfViewer.name || 'PDF'}
+              </span>
+              <a href={pdfViewer.url} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-outline" style={{ padding: '6px 10px', fontSize: '0.7rem' }}>
+                Abrir externo
+              </a>
+            </div>
+            <iframe
+              src={pdfViewer.url}
+              style={{ flex: 1, border: 'none', width: '100%' }}
+              title={pdfViewer.name || 'PDF'}
+            />
           </div>
         )}
 
