@@ -2,6 +2,9 @@ const sistemas = {
   name: "Sistemas de ecuaciones",
   order: 2,
   status: "locked",
+  extraMaterials: [
+    { id: 1, url: "/pau_macs_sistemes.pdf", name: "Exercicis PAU MACS - Sistemes d'equacions (Catalunya)", type: "application/pdf", uploadDate: "2026-04-27T00:00:00.000Z" }
+  ],
   theoryBlocks: [
     {
       id: "sist-1",

@@ -1122,6 +1122,12 @@ function extractUserState(subjects) {
   return state
 }
 
+function mergeExtraMaterials(defaults, saved) {
+  const savedIds = new Set(saved.map(m => m.id))
+  const missing = defaults.filter(m => !savedIds.has(m.id))
+  return [...missing, ...saved]
+}
+
 // Apply user state on top of mock data
 function applyUserState(subjects, userState) {
   if (!userState) return subjects
@@ -1132,7 +1138,7 @@ function applyUserState(subjects, userState) {
       return {
         ...t,
         status: topicState?.status || t.status,
-        extraMaterials: topicState?.extraMaterials || t.extraMaterials || [],
+        extraMaterials: mergeExtraMaterials(t.extraMaterials || [], topicState?.extraMaterials || []),
         theoryBlocks: (t.theoryBlocks || []).map(b => {
           const blockState = userState[`block_${b.id}`]
           return {
